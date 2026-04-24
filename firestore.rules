@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// ============================================
+// CampusKart - Firestore Security Rules
+// ============================================
+// Deploy with:  firebase deploy --only firestore:rules
+//
+// REQUIRED COMPOSITE INDEXES (create via Firebase Console):
+// ┌──────────┬──────────────────────────────────────┐
+// │ products │ status ASC,  createdAt DESC           │
+// │ products │ status ASC,  price ASC                │
+// │ products │ userId ASC,  status ASC, createdAt DESC│
+// └──────────┴──────────────────────────────────────┘
+// ============================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Products Collection ────────────────────
+    match /products/{productId} {
+      // Anyone can browse listings (no auth required)
+      allow read: if true;
+
+      // Only authenticated users can create listings.
+      // The document must include a userId that matches the caller
+      // and a status field set to 'active'.
+      allow create: if request.auth != null
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.status == 'active';
+
+      // Only the product owner can update or delete their listing.
+      // savesCount can be updated by any authenticated user (for
+      // the increment on save/unsave), so we allow writes from
+      // the owner OR if only savesCount is changing.
+      allow update: if request.auth != null
+                    && (
+                      resource.data.userId == request.auth.uid
+                      || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['savesCount'])
+                    );
+
+      allow delete: if request.auth != null
+                    && resource.data.userId == request.auth.uid;
+    }
+
+    // ── User Profile & Saved Items ─────────────
+    match /users/{userId} {
+      // Users can read/write their own profile document
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId;
+
+      // Saved Items subcollection — scoped to the owning user
+      match /savedItems/{productId} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid == userId;
+      }
+    }
+
+    // ── Catch-all: deny everything else ────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

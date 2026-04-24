@@ -1,66 +1,106 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+'use client';
+import { useState } from 'react';
+import { useAuth } from '@/context/AuthContext';
+import BottomNav from '@/components/BottomNav';
+import HomeScreen from '@/components/screens/HomeScreen';
+import SearchScreen from '@/components/screens/SearchScreen';
+import AddProductScreen from '@/components/screens/AddProductScreen';
+import ChatsScreen from '@/components/screens/ChatsScreen';
+import ProfileScreen from '@/components/screens/ProfileScreen';
+import ProductDetailScreen from '@/components/screens/ProductDetailScreen';
+import ChatScreen from '@/components/screens/ChatScreen';
+import LoginScreen from '@/components/screens/LoginScreen';
 
 export default function Home() {
-  return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+  const { user, loading } = useAuth();
+  const [activeTab, setActiveTab] = useState('home');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [selectedChat, setSelectedChat] = useState(null);
+
+  // Show a loading spinner while Firebase resolves the auth session
+  if (loading) {
+    return (
+      <div className="app-shell" style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        minHeight: '100dvh', background: 'var(--white)',
+      }}>
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px',
+        }}>
+          <div className="login-logo">🛒</div>
+          <p style={{ color: 'var(--text-tertiary)', fontSize: '14px' }}>Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Not signed in → show login
+  if (!user) {
+    return (
+      <div className="app-shell">
+        <LoginScreen />
+      </div>
+    );
+  }
+
+  // Product Detail view
+  if (selectedProduct) {
+    return (
+      <div className="app-shell">
+        <ProductDetailScreen
+          product={selectedProduct}
+          onBack={() => setSelectedProduct(null)}
+          onChat={() => {
+            setSelectedChat({
+              id: selectedProduct.seller?.name || selectedProduct.sellerName,
+              name: selectedProduct.seller?.name || selectedProduct.sellerName,
+              avatar: selectedProduct.seller?.avatar || (selectedProduct.sellerName || 'U').slice(0, 2).toUpperCase(),
+            });
+            setSelectedProduct(null);
+          }}
         />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.js file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </div>
+    );
+  }
+
+  // Individual Chat view
+  if (selectedChat) {
+    return (
+      <div className="app-shell">
+        <ChatScreen
+          chat={selectedChat}
+          onBack={() => {
+            setSelectedChat(null);
+            setActiveTab('chats');
+          }}
+        />
+      </div>
+    );
+  }
+
+  const renderScreen = () => {
+    switch (activeTab) {
+      case 'home':
+        return <HomeScreen onProductClick={setSelectedProduct} />;
+      case 'search':
+        return <SearchScreen onProductClick={setSelectedProduct} />;
+      case 'add':
+        return <AddProductScreen />;
+      case 'chats':
+        return <ChatsScreen onChatClick={setSelectedChat} />;
+      case 'profile':
+        return <ProfileScreen />;
+      default:
+        return <HomeScreen onProductClick={setSelectedProduct} />;
+    }
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="page-content">
+        {renderScreen()}
+      </div>
+      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
     </div>
   );
 }
