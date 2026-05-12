@@ -64,7 +64,9 @@ export async function uploadProductImage(file) {
     const storageRef = ref(storage, storagePath);
 
     // Upload the compressed file bytes
-    const snapshot = await uploadBytes(storageRef, compressedFile);
+    const snapshot = await uploadBytes(storageRef, compressedFile, {
+      contentType: compressedFile.type || file.type || 'image/jpeg',
+    });
     console.log('[Storage] Upload complete:', snapshot.metadata.fullPath);
 
     // Retrieve and return the public download URL

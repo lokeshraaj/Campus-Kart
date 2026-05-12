@@ -512,6 +512,58 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
           border-color: #FCA5A5;
           color: #EF4444;
         }
+
+        @media (max-width: 480px) {
+          .pdp-shell {
+            min-height: 100svh;
+            padding-bottom: calc(76px + env(safe-area-inset-bottom));
+          }
+          .pdp-topbar {
+            padding: 10px 12px;
+          }
+          .pdp-topbar-btn {
+            width: 38px;
+            height: 38px;
+          }
+          .pdp-topbar-title {
+            max-width: 58%;
+          }
+          .pdp-container {
+            padding: 12px;
+          }
+          .pdp-grid {
+            gap: 1.25rem;
+          }
+          .pdp-main-image {
+            height: min(74vw, 320px);
+            border-radius: 10px;
+          }
+          .pdp-thumbnails {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+          }
+          .pdp-title {
+            font-size: 1.25rem;
+          }
+          .pdp-price {
+            font-size: 1.85rem;
+          }
+          .pdp-seller-card {
+            align-items: flex-start;
+            padding: 0.875rem;
+            gap: 10px;
+          }
+          .pdp-seller-rating {
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            max-width: 76px;
+          }
+          .pdp-verified {
+            margin-top: 4px;
+          }
+          .pdp-mobile-bar {
+            padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+          }
+        }
       `}} />
 
       <div className="pdp-shell" id="product-detail-page">

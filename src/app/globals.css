@@ -2113,6 +2113,241 @@ ul, ol {
   }
 }
 
+@media (max-width: 480px) {
+  :root {
+    --bottom-nav-height: 74px;
+  }
+
+  html,
+  body {
+    width: 100%;
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100svh;
+  }
+
+  .page-content {
+    width: 100%;
+    min-width: 0;
+    padding-bottom: calc(var(--bottom-nav-height) + 18px + env(safe-area-inset-bottom));
+  }
+
+  .bottom-nav {
+    max-width: 100%;
+    height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+    padding: 0 8px env(safe-area-inset-bottom);
+    align-items: center;
+  }
+
+  .nav-item {
+    min-width: 0;
+    flex: 1;
+    padding: 6px 4px;
+  }
+
+  .nav-item-label {
+    font-size: 10px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nav-item-add {
+    flex: 0.95;
+  }
+
+  .nav-item-add .nav-add-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+  }
+
+  .top-bar {
+    padding: 10px 12px;
+  }
+
+  .top-bar-inner {
+    gap: 8px;
+  }
+
+  .search-bar {
+    height: 42px;
+    min-width: 0;
+  }
+
+  .notification-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .college-banner {
+    margin: 0 12px;
+    align-items: flex-start;
+    line-height: 1.45;
+  }
+
+  .category-section {
+    padding: 12px 0;
+  }
+
+  .category-scroll,
+  .deals-scroll,
+  .product-grid {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .section-header {
+    padding: 18px 12px 10px;
+    gap: 10px;
+  }
+
+  .section-title {
+    font-size: 17px;
+    min-width: 0;
+  }
+
+  .section-link {
+    flex-shrink: 0;
+  }
+
+  .product-grid {
+    gap: 10px;
+  }
+
+  .product-card {
+    border-radius: 12px;
+  }
+
+  .product-card-info {
+    padding: 10px;
+  }
+
+  .product-card-title {
+    font-size: 12.5px;
+  }
+
+  .product-card-price {
+    font-size: 16px;
+  }
+
+  .product-card-meta {
+    min-width: 0;
+  }
+
+  .product-card-meta span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .deal-card {
+    min-width: min(82vw, 300px);
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .deal-card-image {
+    width: 72px;
+    height: 72px;
+  }
+
+  .sort-bar {
+    padding: 10px 12px;
+    gap: 12px;
+  }
+
+  .sort-count {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-page {
+    height: 100svh;
+  }
+
+  .chat-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .chat-header-avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 12px;
+  }
+
+  .chat-header-info {
+    min-width: 0;
+  }
+
+  .chat-header-name,
+  .chat-header-status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chat-mark-sold {
+    padding: 8px;
+    font-size: 0;
+    border-radius: 10px;
+  }
+
+  .chat-messages {
+    padding: 12px;
+  }
+
+  .chat-message {
+    max-width: 88%;
+    padding: 10px 12px;
+    border-radius: 16px;
+  }
+
+  .chat-input-bar {
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .chats-list-header,
+  .profile-header,
+  .search-page-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .chat-list-item {
+    padding: 12px;
+  }
+
+  .profile-stats {
+    width: 100%;
+    justify-content: space-around;
+    gap: 12px;
+  }
+
+  .search-recent,
+  .search-trending {
+    padding: 14px 12px;
+  }
+}
+
+@media (max-width: 340px) {
+  .product-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .deal-card {
+    min-width: calc(100vw - 24px);
+  }
+}
+
 /* ============================================
    Toast Notifications
    ============================================ */

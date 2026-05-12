@@ -704,6 +704,65 @@ export default function ProfileScreen() {
         .btn-primary:hover {
           background: #1E293B;
         }
+
+        @media (max-width: 640px) {
+          .profile-wrapper {
+            min-height: 100svh;
+            padding: 12px;
+            padding-bottom: calc(92px + env(safe-area-inset-bottom));
+          }
+          .profile-grid {
+            gap: 12px;
+          }
+          .profile-sidebar {
+            position: static;
+          }
+          .profile-card {
+            border-radius: 10px;
+            padding: 18px;
+          }
+          .main-card {
+            min-height: 0;
+          }
+          .avatar {
+            width: 78px;
+            height: 78px;
+            font-size: 1.55rem;
+          }
+          .info-item {
+            align-items: flex-start;
+            min-width: 0;
+          }
+          .info-item span {
+            min-width: 0;
+            overflow-wrap: anywhere;
+          }
+          .tabs-header {
+            gap: 18px;
+            margin: -2px -2px 18px;
+            padding: 0 2px;
+          }
+          .tab-btn {
+            padding-bottom: 12px;
+            font-size: 0.82rem;
+          }
+          .empty-state {
+            padding: 3rem 1rem;
+          }
+          .product-row {
+            align-items: flex-start;
+            padding: 10px 0;
+          }
+          .mark-sold-btn {
+            padding: 6px 8px;
+          }
+          .sold-badge-tag {
+            align-self: center;
+          }
+          .form-actions .btn-primary {
+            width: 100%;
+          }
+        }
       `}} />
     </div>
   );

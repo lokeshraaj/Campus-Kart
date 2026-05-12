@@ -1,16 +1,18 @@
 'use client';
-import { useState } from 'react';
-import { Loader2, Check } from 'lucide-react';
-import { CldUploadWidget } from 'next-cloudinary';
+import { useRef, useState } from 'react';
+import { Loader2, Check, ImagePlus, X } from 'lucide-react';
 import { addProduct } from '@/lib/productService';
 import { getCurrentUser } from '@/lib/authService';
+import { uploadProductImage } from '@/lib/storageService';
 import toast from 'react-hot-toast';
 
-const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET?.trim();
+const MAX_IMAGES = 5;
 
 export default function AddProductScreen({ onNavigate }) {
   const [loading, setLoading] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const fileInputRef = useRef(null);
 
   const [images, setImages] = useState([]);
   const [title, setTitle] = useState('');
@@ -31,6 +33,57 @@ export default function AddProductScreen({ onNavigate }) {
     setLocation('');
     setImages([]);
     setError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleImageUpload = async (event) => {
+    const selectedFiles = Array.from(event.target.files || []);
+    if (selectedFiles.length === 0) return;
+
+    setError('');
+    const currentUser = getCurrentUser();
+    if (!currentUser) {
+      const message = 'You must be logged in to upload images.';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    const remainingSlots = MAX_IMAGES - images.length;
+    if (remainingSlots <= 0) {
+      toast.error(`You can upload up to ${MAX_IMAGES} images.`);
+      return;
+    }
+
+    const filesToUpload = selectedFiles
+      .filter((file) => file.type.startsWith('image/'))
+      .slice(0, remainingSlots);
+
+    if (filesToUpload.length === 0) {
+      const message = 'Please choose a valid image file.';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+
+    setUploadingImages(true);
+    try {
+      const uploadedUrls = await Promise.all(filesToUpload.map(uploadProductImage));
+      setImages((prev) => [...prev, ...uploadedUrls].slice(0, MAX_IMAGES));
+      toast.success(`${uploadedUrls.length} image${uploadedUrls.length > 1 ? 's' : ''} uploaded!`);
+    } catch (err) {
+      console.error('Image upload failed:', err);
+      const message = err.userMessage || err.message || 'Image upload failed. Please try again.';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setUploadingImages(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const removeImage = (imageUrl) => {
+    setImages((prev) => prev.filter((img) => img !== imageUrl));
   };
 
   /** Called when the user dismisses the success modal */
@@ -143,67 +196,53 @@ export default function AddProductScreen({ onNavigate }) {
           {/* Image Upload */}
           <div className="sell-field">
             <label className="sell-label">Product Images * (up to 5)</label>
-            <CldUploadWidget
-              uploadPreset={CLOUDINARY_UPLOAD_PRESET}
-              options={{
-                maxFiles: 5,
-                clientAllowedFormats: ['jpg', 'jpeg', 'png', 'webp'],
-                sources: ['local', 'camera', 'url'],
-                maxImageWidth: 1200,
-                maxImageHeight: 1200,
-                maxFileSize: 5000000,
-              }}
-              onError={(err) => {
-                const message = CLOUDINARY_UPLOAD_PRESET
-                  ? 'Image upload failed. Please try again.'
-                  : 'Cloudinary upload is not configured for this deployment.';
-                console.error('Cloudinary upload failed:', err);
-                setError(message);
-                toast.error(message);
-              }}
-              onSuccess={(result) => {
-                const url = result?.info?.secure_url;
-                if (!url) return;
-                setImages((prev) => {
-                  if (prev.includes(url)) return prev;
-                  return prev.length < 5 ? [...prev, url] : prev;
-                });
-                toast.success("Image uploaded!");
-              }}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="sell-file-input"
+              onChange={handleImageUpload}
+              disabled={loading || uploadingImages || images.length >= MAX_IMAGES}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className={`sell-upload-btn ${images.length > 0 ? 'sell-upload-btn--done' : ''}`}
+              disabled={loading || uploadingImages || images.length >= MAX_IMAGES}
             >
-              {({ open }) => (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    if (!CLOUDINARY_UPLOAD_PRESET) {
-                      const message = 'Cloudinary upload is not configured for this deployment.';
-                      setError(message);
-                      toast.error(message);
-                      return;
-                    }
-                    open();
-                  }}
-                  className={`sell-upload-btn ${images.length > 0 ? 'sell-upload-btn--done' : ''}`}
-                >
-                  {images.length > 0 ? (
-                    <>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                      {images.length} Image{images.length > 1 ? 's' : ''} Uploaded
-                    </>
-                  ) : (
-                    <>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-                      Upload Product Image
-                    </>
-                  )}
-                </button>
+              {uploadingImages ? (
+                <>
+                  <Loader2 size={18} strokeWidth={2.5} className="animate-spin" />
+                  Uploading images...
+                </>
+              ) : images.length > 0 ? (
+                <>
+                  <Check size={18} strokeWidth={2.5} />
+                  {images.length} Image{images.length > 1 ? 's' : ''} Uploaded
+                </>
+              ) : (
+                <>
+                  <ImagePlus size={18} strokeWidth={2} />
+                  Upload Product Images
+                </>
               )}
-            </CldUploadWidget>
+            </button>
             {images.length > 0 && (
               <div className="sell-thumb-grid">
                 {images.map((img, index) => (
-                  <img key={img + index} src={img} alt={`Uploaded preview ${index + 1}`} className="sell-thumb" />
+                  <div key={img + index} className="sell-thumb-wrap">
+                    <img src={img} alt={`Uploaded preview ${index + 1}`} className="sell-thumb" />
+                    <button
+                      type="button"
+                      className="sell-thumb-remove"
+                      onClick={() => removeImage(img)}
+                      aria-label="Remove image"
+                      disabled={loading || uploadingImages}
+                    >
+                      <X size={14} strokeWidth={2.5} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -307,6 +346,7 @@ export default function AddProductScreen({ onNavigate }) {
 
         .sell-form { display: flex; flex-direction: column; gap: 24px; }
         .sell-form--disabled { opacity: 0.6; pointer-events: none; }
+        .sell-file-input { display: none; }
         .sell-field { display: flex; flex-direction: column; gap: 6px; }
         .sell-label { font-size: 13px; font-weight: 600; color: #334155; letter-spacing: 0.01em; }
 
@@ -341,9 +381,18 @@ export default function AddProductScreen({ onNavigate }) {
         .sell-upload-btn:hover { background: #1D4ED8; }
         .sell-upload-btn--done { background: #10B981; }
         .sell-upload-btn--done:hover { background: #059669; }
+        .sell-upload-btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
 
         .sell-thumb-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .sell-thumb-wrap { position: relative; min-width: 0; }
         .sell-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; border: 1px solid #E2E8F0; }
+        .sell-thumb-remove {
+          position: absolute; top: 6px; right: 6px;
+          width: 28px; height: 28px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: rgba(15, 23, 42, 0.76); color: #FFFFFF;
+          border: 1px solid rgba(255, 255, 255, 0.28);
+        }
 
         .sell-toggle-group { display: flex; gap: 8px; }
         .sell-toggle {
@@ -472,6 +521,37 @@ export default function AddProductScreen({ onNavigate }) {
           transition: background 0.15s ease;
         }
         .sm-btn:hover { background: #1D4ED8; }
+
+        @media (max-width: 480px) {
+          .sell-page {
+            min-height: 100svh;
+            padding: 14px;
+            padding-bottom: calc(92px + env(safe-area-inset-bottom));
+          }
+          .sell-header { margin-bottom: 20px; }
+          .sell-title { font-size: 23px; }
+          .sell-form { gap: 18px; }
+          .sell-row { gap: 18px; }
+          .sell-input, .sell-textarea, .sell-select, .sell-upload-btn {
+            font-size: 16px;
+          }
+          .sell-thumb-grid { grid-template-columns: repeat(2, 1fr); }
+          .sell-submit {
+            position: sticky;
+            bottom: calc(78px + env(safe-area-inset-bottom));
+            z-index: 20;
+            margin-top: 22px;
+          }
+          .sm-card {
+            width: min(92vw, 360px);
+            padding: 30px 20px 24px;
+            border-radius: 18px;
+          }
+          .sm-confetti-area {
+            width: 140px;
+            height: 140px;
+          }
+        }
       `}} />
     </div>
   );
