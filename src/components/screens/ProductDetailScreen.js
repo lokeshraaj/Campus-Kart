@@ -1,11 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { ArrowLeft, Share2, Sparkles, Recycle, ShieldCheck, Star, MapPin, Heart, MessageCircle, BadgeDollarSign, ImageIcon } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useSaveToggle } from '@/hooks/useRealtimeData';
 import { useSuccessPopup } from '@/components/SuccessPopup';
 import { rateSeller } from '@/lib/productService';
+import { getProfileCollegeLine, getProfileDisplayName, getProfileInitials, getUserProfile } from '@/lib/userService';
 import toast from 'react-hot-toast';
 
 /**
@@ -45,8 +46,33 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const { user } = useAuth();
   const { isSaved, toggling, toggle: rawToggle } = useSaveToggle(user?.uid, product);
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
+  const [sellerProfile, setSellerProfile] = useState(null);
 
   const { showSuccess } = useSuccessPopup();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSellerProfile() {
+      if (!product?.userId) {
+        setSellerProfile(null);
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile(product.userId);
+        if (!cancelled) setSellerProfile(profile);
+      } catch (err) {
+        console.warn('Seller profile could not be loaded:', err?.message || err);
+        if (!cancelled) setSellerProfile(null);
+      }
+    }
+
+    loadSellerProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [product?.userId]);
 
   if (!product) return null;
   const galleryImages = (Array.isArray(product.images) && product.images.length > 0)
@@ -63,12 +89,14 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
     }
   };
 
-  const sellerName = product.seller?.name || product.sellerName || 'Seller';
-  const sellerAvatar = product.seller?.avatar || sellerName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  const sellerCollege = product.seller?.college || product.college || 'College not specified';
-  const sellerVerified = product.seller?.verified !== undefined ? product.seller.verified : true;
-  const sellerRating = product.seller?.rating || 4.5;
-  const sellerReviews = product.seller?.reviews || 0;
+  const sellerName = getProfileDisplayName(sellerProfile, product.seller?.name || product.sellerName || 'Seller');
+  const sellerAvatar = sellerProfile?.photoURL
+    ? null
+    : (product.seller?.avatar || getProfileInitials(sellerProfile, sellerName));
+  const sellerCollege = getProfileCollegeLine(sellerProfile, product.seller?.college || product.college || 'College not specified');
+  const sellerVerified = sellerProfile?.verified ?? sellerProfile?.emailVerified ?? product.seller?.verified ?? true;
+  const sellerRating = sellerProfile?.ratingAverage || product.seller?.rating || 4.5;
+  const sellerReviews = sellerProfile?.ratingCount || product.seller?.reviews || 0;
   const postedDate = product.postedAt || (product.createdAt?.toDate ? product.createdAt.toDate().toLocaleDateString() : 'recently');
   const canRateSeller = product.status === 'sold' && !!user?.uid && user.uid !== product.userId;
 
@@ -385,6 +413,12 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
           font-weight: 700;
           color: #2563EB;
           flex-shrink: 0;
+          overflow: hidden;
+        }
+        .pdp-seller-avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
         }
         .pdp-seller-info { flex: 1; min-width: 0; }
         .pdp-seller-name {
@@ -670,7 +704,11 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
 
               {/* Seller Card */}
               <div className="pdp-seller-card" id="seller-card">
-                <div className="pdp-seller-avatar">{sellerAvatar}</div>
+                <div className="pdp-seller-avatar">
+                  {sellerProfile?.photoURL ? (
+                    <img src={sellerProfile.photoURL} alt={sellerName} />
+                  ) : sellerAvatar}
+                </div>
                 <div className="pdp-seller-info">
                   <div className="pdp-seller-name">
                     {sellerName}

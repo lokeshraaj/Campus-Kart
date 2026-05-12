@@ -12,6 +12,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
+import { saveUserProfile } from '@/lib/userService';
 
 const AuthContext = createContext({
   user: null,
@@ -32,6 +33,14 @@ export function AuthProvider({ children }) {
       setLoading(false);
       if (firebaseUser) {
         console.log('[AuthContext] Signed in:', firebaseUser.uid);
+        saveUserProfile(firebaseUser.uid, {
+          displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+          email: firebaseUser.email || '',
+          photoURL: firebaseUser.photoURL || '',
+          emailVerified: firebaseUser.emailVerified || false,
+        }).catch((err) => {
+          console.warn('[AuthContext] Profile sync skipped:', err?.message || err);
+        });
       } else {
         console.log('[AuthContext] No user signed in');
       }

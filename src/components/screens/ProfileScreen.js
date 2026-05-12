@@ -7,6 +7,7 @@ import { useToast } from '@/context/ToastContext';
 import { logout } from '@/lib/authService';
 import { useMyListings, useSavedItems } from '@/hooks/useRealtimeData';
 import { cleanupSoldProductsByUser, markAsSold } from '@/lib/productService';
+import { getProfileDisplayName, getUserProfile, saveUserProfile } from '@/lib/userService';
 import { useSuccessPopup } from '@/components/SuccessPopup';
 import toast from 'react-hot-toast';
 
@@ -35,8 +36,8 @@ export default function ProfileScreen() {
   }, [user?.uid]);
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'User';
-  const avatarText = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const userEmail = user?.email || '';
+  const [profileSaving, setProfileSaving] = useState(false);
 
   // Live Display State (Updated only on Save)
   const [profileData, setProfileData] = useState({
@@ -55,20 +56,79 @@ export default function ProfileScreen() {
     bio: profileData.bio
   });
 
+  const avatarText = getProfileDisplayName(profileData, displayName)
+    .split(' ')
+    .map(w => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      if (!user?.uid) return;
+
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (cancelled || !profile) return;
+
+        const nextProfile = {
+          name: getProfileDisplayName(profile, displayName),
+          university: profile.university || 'Ramgarh Engineering College',
+          branch: profile.branch || 'Computer Science and Engineering',
+          bio: profile.bio || 'Full-stack developer building cool things for the web.',
+        };
+
+        setProfileData(nextProfile);
+        setFormData({
+          ...nextProfile,
+          email: profile.email || userEmail,
+        });
+      } catch (err) {
+        console.warn('Profile could not be loaded:', err?.message || err);
+      }
+    }
+
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, displayName, userEmail]);
+
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    setProfileData({
+    if (!user?.uid || profileSaving) return;
+
+    const nextProfile = {
       name: formData.name,
       university: formData.university,
       branch: formData.branch,
-      bio: formData.bio
-    });
-    console.log('Save to Firebase triggered:', formData);
-    toast.success('Profile updated successfully!');
+      bio: formData.bio,
+    };
+
+    try {
+      setProfileSaving(true);
+      await saveUserProfile(user.uid, {
+        ...nextProfile,
+        displayName: formData.name,
+        email: userEmail,
+        photoURL: user.photoURL || '',
+        emailVerified: user.emailVerified || false,
+        verified: user.emailVerified || true,
+      });
+      setProfileData(nextProfile);
+      toast.success('Profile updated successfully!');
+    } catch (err) {
+      console.error('Profile save failed:', err);
+      toast.error('Profile update failed');
+    } finally {
+      setProfileSaving(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -269,7 +329,9 @@ export default function ProfileScreen() {
                   </div>
 
                   <div className="form-actions">
-                    <button type="submit" className="btn-primary">Save Changes</button>
+                    <button type="submit" className="btn-primary" disabled={profileSaving}>
+                      {profileSaving ? 'Saving...' : 'Save Changes'}
+                    </button>
                   </div>
                 </form>
               )}
