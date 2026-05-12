@@ -1,10 +1,11 @@
 'use client';
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import Image from 'next/image';
 import { Search, Bell, GraduationCap, Flame, Sparkles, Heart, ArrowUpDown } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useRecentlyAdded, useBestDeals, useSaveToggle } from '@/hooks/useRealtimeData';
+import { isExpiredChat, subscribeToUserChats } from '@/lib/chatService';
 import { categories } from '@/data/mockData';
 
 // Tiny shimmer SVG encoded as a data URI — used as a blur placeholder
@@ -97,16 +98,39 @@ function WishlistButton({ product }) {
 
 export default function HomeScreen({ onProductClick, onSearchClick }) {
   const { showToast } = useToast();
+  const { user } = useAuth();
   const [activeCategory, setActiveCategory] = useState('all');
   const [sortOrder, setSortOrder] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
   const handleNotificationClick = () => {
-    showToast('No new notifications right now.', 'info', 3000);
+    const message = notificationCount > 0
+      ? `You have ${notificationCount} recent message ${notificationCount === 1 ? 'notification' : 'notifications'}. Open Messages to reply.`
+      : 'No new notifications right now.';
+    showToast(message, 'info', 3000);
   };
 
   // Toast handler for real-time errors
   const handleRealtimeError = useCallback((msg) => {
     showToast(msg, 'info', 5000);
   }, [showToast]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setNotificationCount(0);
+      return;
+    }
+
+    const unsubscribe = subscribeToUserChats(user.uid, (chatData) => {
+      const count = chatData.filter((chat) => (
+        !isExpiredChat(chat) &&
+        chat.lastMessage &&
+        chat.lastMessageSenderId !== user.uid
+      )).length;
+      setNotificationCount(count);
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   // ── Real-time feeds from Firestore ──
   const {
@@ -225,7 +249,7 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
             type="button"
           >
             <Bell size={18} strokeWidth={2} />
-            <span className="notification-badge"></span>
+            {notificationCount > 0 && <span className="notification-badge"></span>}
           </button>
         </div>
       </div>

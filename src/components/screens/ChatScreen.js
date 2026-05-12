@@ -77,7 +77,7 @@ export default function ChatScreen({ chat, onBack }) {
     if (!chat.productId) return;
     try {
       await markAsSold(chat.productId);
-      showSuccess('Item Sold!', 'Congratulations! Your item has been marked as sold.');
+      showSuccess('Item Sold!', 'The listing has been removed from the marketplace.');
     } catch (err) {
       console.error('Mark sold failed:', err);
       toast.error('Failed to mark as sold');
@@ -199,7 +199,7 @@ export default function ChatScreen({ chat, onBack }) {
         <button
           className="chat-send-btn"
           onClick={handleSend}
-          id="chat-send-button"
+          id="-button"
           aria-label="Send message"
           disabled={sending || !input.trim()}
           style={{ opacity: sending || !input.trim() ? 0.5 : 1 }}

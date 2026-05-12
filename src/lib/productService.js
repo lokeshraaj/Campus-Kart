@@ -20,8 +20,8 @@ import {
   serverTimestamp,
   Timestamp,
   increment,
-  deleteField,
   setDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 
@@ -188,30 +188,76 @@ export async function deleteProduct(productId) {
 }
 
 /**
- * Mark a product as sold. Sets `status` to 'sold' so it
- * drops out of the active feed but remains in the seller's
- * "Sold Items" dashboard.
+ * Mark a product as sold by removing its listing document.
+ * Chat documents already keep product title/price context, so the
+ * marketplace does not need to retain sold listings in `products`.
  *
  * @param {string} productId – Firestore document ID
  * @returns {Promise<void>}
  */
 export async function markAsSold(productId) {
   try {
-    const docRef = doc(db, 'products', productId);
-    const snap = await getDoc(docRef);
-    const data = snap.exists() ? snap.data() : {};
-    const primaryImage = data?.images?.[0] || data?.imageUrl || '';
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error('User must be authenticated to mark a product as sold.');
+    }
 
-    await updateDoc(docRef, {
-      status: 'sold',
-      soldAt: serverTimestamp(),
-      // Keep sold docs lightweight: retain only one preview image.
-      imageUrl: primaryImage,
-      images: primaryImage ? [primaryImage] : deleteField(),
-    });
-    console.log('[DB] Product marked as sold:', productId);
+    const chatsQuery = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', user.uid),
+      where('productId', '==', productId)
+    );
+    const chatsSnapshot = await getDocs(chatsQuery);
+    if (!chatsSnapshot.empty) {
+      const chatBatch = writeBatch(db);
+      chatsSnapshot.docs.forEach((chatDoc) => {
+        chatBatch.update(chatDoc.ref, {
+          productStatus: 'sold',
+          soldAt: serverTimestamp(),
+        });
+      });
+      await chatBatch.commit();
+    }
+
+    const docRef = doc(db, 'products', productId);
+    await deleteDoc(docRef);
+    console.log('[DB] Sold product deleted:', productId);
   } catch (error) {
     console.error('[DB] markAsSold failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Delete old sold product documents for a seller.
+ * This cleans up listings created before sold items were hard-deleted.
+ *
+ * @param {string} userId - Firebase Auth UID of the seller
+ * @returns {Promise<number>} Number of deleted product documents
+ */
+export async function cleanupSoldProductsByUser(userId) {
+  try {
+    if (!userId) return 0;
+
+    const q = query(
+      productsRef,
+      where('userId', '==', userId),
+      where('status', '==', 'sold')
+    );
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) return 0;
+
+    const batch = writeBatch(db);
+    snapshot.docs.forEach((productDoc) => {
+      batch.delete(productDoc.ref);
+    });
+    await batch.commit();
+
+    console.log('[DB] Cleaned up sold products:', snapshot.size);
+    return snapshot.size;
+  } catch (error) {
+    console.error('[DB] cleanupSoldProductsByUser failed:', error.message);
     throw error;
   }
 }

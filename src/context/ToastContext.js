@@ -14,6 +14,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useRef } from 'react';
+import { Toaster } from 'react-hot-toast';
 
 // ─────────────────────────────────────────────
 // Context
@@ -93,6 +94,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={{ showToast, dismissToast }}>
       {children}
+      <Toaster position="top-center" />
 
       {/* Toast Container — renders at top-center of viewport */}
       {toasts.length > 0 && (

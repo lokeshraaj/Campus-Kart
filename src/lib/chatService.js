@@ -13,13 +13,18 @@ import {
   doc,
   setDoc,
   updateDoc,
+  getDocs,
   query,
   where,
   orderBy,
   onSnapshot,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
+
+const SOLD_CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+const INACTIVE_CHAT_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 function needsIndex(error) {
   if (!error) return false;
@@ -36,6 +41,45 @@ function safeUnsubscribe(unsub) {
   } catch (error) {
     console.warn('[Chat] unsubscribe skipped:', error?.message || error);
   }
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (typeof value.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return 0;
+}
+
+export function isExpiredChat(chat, now = Date.now()) {
+  const soldAtMs = toMillis(chat?.soldAt);
+  if (soldAtMs && now - soldAtMs >= SOLD_CHAT_TTL_MS) return true;
+
+  const lastActivityMs = toMillis(chat?.lastMessageAt) || toMillis(chat?.createdAt);
+  if (lastActivityMs && now - lastActivityMs >= INACTIVE_CHAT_TTL_MS) return true;
+
+  return false;
+}
+
+async function deleteChatWithMessages(chatId) {
+  const chatRef = doc(db, 'chats', chatId);
+  const messagesSnap = await getDocs(collection(db, 'chats', chatId, 'messages'));
+  let batch = writeBatch(db);
+  let batchCount = 0;
+
+  for (const messageDoc of messagesSnap.docs) {
+    batch.delete(messageDoc.ref);
+    batchCount += 1;
+
+    if (batchCount >= 450) {
+      await batch.commit();
+      batch = writeBatch(db);
+      batchCount = 0;
+    }
+  }
+
+  batch.delete(chatRef);
+  await batch.commit();
 }
 
 // ─────────────────────────────────────────────
@@ -98,11 +142,32 @@ export async function sendMessage(chatId, senderId, text) {
   const chatRef = doc(db, 'chats', chatId);
   await updateDoc(chatRef, {
     lastMessage: text.trim().slice(0, 100),
+    lastMessageSenderId: senderId,
     lastMessageAt: serverTimestamp(),
   });
 
   console.log('[Chat] Message sent:', msgDoc.id);
   return msgDoc.id;
+}
+
+export async function cleanupExpiredChatsForUser(userId, chats = null) {
+  if (!userId) return 0;
+
+  const chatDocs = Array.isArray(chats)
+    ? chats
+    : (await getDocs(query(
+        collection(db, 'chats'),
+        where('participants', 'array-contains', userId)
+      ))).docs.map((chatDoc) => ({ id: chatDoc.id, ...chatDoc.data() }));
+
+  const expiredChats = chatDocs.filter(isExpiredChat);
+  await Promise.all(expiredChats.map((chat) => deleteChatWithMessages(chat.id)));
+
+  if (expiredChats.length > 0) {
+    console.log('[Chat] Cleaned up expired chats:', expiredChats.length);
+  }
+
+  return expiredChats.length;
 }
 
 // ─────────────────────────────────────────────

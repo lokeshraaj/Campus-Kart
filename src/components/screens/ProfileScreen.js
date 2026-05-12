@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
-import { MapPin, Mail, BookOpen, Package, Heart, CheckCircle, Settings, LogOut, Loader2 } from 'lucide-react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { MapPin, Mail, BookOpen, Package, Heart, Settings, LogOut, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { logout } from '@/lib/authService';
-import { useMyListings, useSoldItems, useSavedItems } from '@/hooks/useRealtimeData';
-import { markAsSold } from '@/lib/productService';
+import { useMyListings, useSavedItems } from '@/hooks/useRealtimeData';
+import { cleanupSoldProductsByUser, markAsSold } from '@/lib/productService';
 import { useSuccessPopup } from '@/components/SuccessPopup';
 import toast from 'react-hot-toast';
 
@@ -15,6 +15,7 @@ export default function ProfileScreen() {
   const { showToast } = useToast();
   const { showSuccess } = useSuccessPopup();
   const [activeTab, setActiveTab] = useState('listings');
+  const soldCleanupUserRef = useRef(null);
 
   const handleRealtimeError = useCallback((msg) => {
     showToast(msg, 'info', 5000);
@@ -22,8 +23,16 @@ export default function ProfileScreen() {
 
   // Real-time Firestore hooks — no mock data
   const { listings, loading: listingsLoading } = useMyListings(user?.uid, { onError: handleRealtimeError });
-  const { soldItems, loading: soldLoading } = useSoldItems(user?.uid, { onError: handleRealtimeError });
   const { savedItems, loading: savedLoading } = useSavedItems(user?.uid, { onError: handleRealtimeError });
+
+  useEffect(() => {
+    if (!user?.uid || soldCleanupUserRef.current === user.uid) return;
+
+    soldCleanupUserRef.current = user.uid;
+    cleanupSoldProductsByUser(user.uid).catch((err) => {
+      console.warn('Sold product cleanup skipped:', err?.message || err);
+    });
+  }, [user?.uid]);
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'User';
   const avatarText = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
@@ -75,7 +84,7 @@ export default function ProfileScreen() {
   const handleMarkSold = async (productId) => {
     try {
       await markAsSold(productId);
-      showSuccess('Item Sold!', 'Congratulations! Your item has been marked as sold.');
+      showSuccess('Item Sold!', 'The listing has been removed from the marketplace.');
     } catch (err) {
       console.error('Failed to mark as sold:', err);
       toast.error('Failed to mark item as sold');
@@ -169,10 +178,6 @@ export default function ProfileScreen() {
                 <span className="stat-label">Listings</span>
               </div>
               <div className="stat-box">
-                <span className="stat-num">{soldLoading ? '–' : soldItems.length}</span>
-                <span className="stat-label">Sold</span>
-              </div>
-              <div className="stat-box">
                 <span className="stat-num">{savedLoading ? '–' : savedItems.length}</span>
                 <span className="stat-label">Saved</span>
               </div>
@@ -204,12 +209,6 @@ export default function ProfileScreen() {
                 <Heart size={18} strokeWidth={2} /> Saved
               </button>
               <button 
-                className={`tab-btn ${activeTab === 'sold' ? 'active' : ''}`}
-                onClick={() => setActiveTab('sold')}
-              >
-                <CheckCircle size={18} strokeWidth={2} /> Sold Items
-              </button>
-              <button 
                 className={`tab-btn ${activeTab === 'edit' ? 'active' : ''}`}
                 onClick={() => setActiveTab('edit')}
               >
@@ -236,15 +235,6 @@ export default function ProfileScreen() {
                 <Heart size={40} strokeWidth={1.5} className="empty-icon" />,
                 'No Saved Items',
                 'Your bookmarked deals will show up here.'
-              )}
-
-              {activeTab === 'sold' && renderProductList(
-                soldItems,
-                soldLoading,
-                <CheckCircle size={40} strokeWidth={1.5} className="empty-icon" />,
-                'No Sold Items',
-                'Track the items you\'ve successfully sold.',
-                true
               )}
 
               {activeTab === 'edit' && (

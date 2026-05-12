@@ -1696,7 +1696,7 @@ ul, ol {
   justify-content: center;
   font-size: 18px;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 2px 8px rgba(31, 89, 214, 0.83);
   transition: all var(--transition-fast);
 }
 

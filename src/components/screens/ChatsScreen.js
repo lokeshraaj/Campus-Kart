@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { Lightbulb, MessageCircle, Loader2 } from 'lucide-react';
-import { subscribeToUserChats } from '@/lib/chatService';
+import { cleanupExpiredChatsForUser, isExpiredChat, subscribeToUserChats } from '@/lib/chatService';
 import { useAuth } from '@/context/AuthContext';
 
 export default function ChatsScreen({ onChatClick }) {
@@ -19,11 +19,15 @@ export default function ChatsScreen({ onChatClick }) {
 
     setLoading(true);
     const unsubscribe = subscribeToUserChats(user.uid, (chatData, error) => {
-      setChats(chatData);
+      setChats(chatData.filter((chat) => !isExpiredChat(chat)));
       setLoading(false);
       if (error) {
         console.error('Failed to load chats:', error);
+        return;
       }
+      cleanupExpiredChatsForUser(user.uid, chatData).catch((err) => {
+        console.warn('Expired chat cleanup skipped:', err?.message || err);
+      });
     });
 
     return () => unsubscribe();
