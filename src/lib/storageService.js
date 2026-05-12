@@ -15,6 +15,34 @@ import {
 import imageCompression from 'browser-image-compression';
 import { storage } from './firebase';
 
+const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME?.trim();
+const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET?.trim();
+
+async function uploadToCloudinary(file) {
+  if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_UPLOAD_PRESET) {
+    throw new Error('Cloudinary upload is not configured.');
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+
+  const response = await fetch(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.secure_url) {
+    throw new Error(data?.error?.message || 'Cloudinary upload failed.');
+  }
+
+  return data.secure_url;
+}
+
 /**
  * Upload a product image to Firebase Storage with client-side compression.
  *
@@ -61,19 +89,24 @@ export async function uploadProductImage(file) {
     const fileExtension = compressedFile.type === 'image/webp' ? 'webp' : 'jpg';
     const storagePath = `products/${timestamp}_${safeName}.${fileExtension}`;
 
-    const storageRef = ref(storage, storagePath);
+    try {
+      const storageRef = ref(storage, storagePath);
 
-    // Upload the compressed file bytes
-    const snapshot = await uploadBytes(storageRef, compressedFile, {
-      contentType: compressedFile.type || file.type || 'image/jpeg',
-    });
-    console.log('[Storage] Upload complete:', snapshot.metadata.fullPath);
+      // Upload the compressed file bytes
+      const snapshot = await uploadBytes(storageRef, compressedFile, {
+        contentType: compressedFile.type || file.type || 'image/jpeg',
+      });
+      console.log('[Storage] Upload complete:', snapshot.metadata.fullPath);
 
-    // Retrieve and return the public download URL
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    console.log('[Storage] Download URL:', downloadUrl);
+      // Retrieve and return the public download URL
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+      console.log('[Storage] Download URL:', downloadUrl);
 
-    return downloadUrl;
+      return downloadUrl;
+    } catch (firebaseError) {
+      console.warn('[Storage] Firebase upload failed, trying Cloudinary fallback:', firebaseError?.message || firebaseError);
+      return await uploadToCloudinary(compressedFile);
+    }
   } catch (error) {
     console.error('[Storage] uploadProductImage failed:', error.code, error.message);
 
@@ -87,8 +120,10 @@ export async function uploadProductImage(file) {
       error.userMessage = 'Image upload was cancelled.';
     } else if (error.message?.toLowerCase().includes('offline') || error.message?.toLowerCase().includes('network')) {
       error.userMessage = 'Image upload failed. Please check your internet connection.';
+    } else if (error.message === 'Cloudinary upload is not configured.') {
+      error.userMessage = 'Image upload failed. Deploy Firebase Storage rules or configure Cloudinary upload variables.';
     } else {
-      error.userMessage = 'Image upload failed. Please try again.';
+      error.userMessage = error.message || 'Image upload failed. Please try again.';
     }
 
     throw error;

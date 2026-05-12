@@ -11,8 +11,6 @@ import {
   collection,
   addDoc,
   doc,
-  getDoc,
-  getDocs,
   setDoc,
   updateDoc,
   query,
@@ -28,6 +26,8 @@ function needsIndex(error) {
   const msg = (error.message || '').toLowerCase();
   return error.code === 'failed-precondition' && msg.includes('index');
 }
+
+const missingIndexQueryKeys = new Set();
 
 function safeUnsubscribe(unsub) {
   if (typeof unsub !== 'function') return;
@@ -57,25 +57,21 @@ export async function findOrCreateChat(buyerId, sellerId, product) {
   const chatId = `${sortedIds[0]}_${sortedIds[1]}_${product.id}`;
 
   const chatRef = doc(db, 'chats', chatId);
-  const chatSnap = await getDoc(chatRef);
-
-  if (!chatSnap.exists()) {
-    await setDoc(chatRef, {
-      participants: sortedIds,
-      buyerId,
-      sellerId,
-      buyerName: product.buyerName || 'Buyer',
-      sellerName: product.sellerName || 'Seller',
-      productId: product.id,
-      productTitle: product.title || '',
-      productImage: product.imageUrl || '',
-      productPrice: product.price || 0,
-      lastMessage: '',
-      lastMessageAt: serverTimestamp(),
-      createdAt: serverTimestamp(),
-    });
-    console.log('[Chat] Created new chat:', chatId);
-  }
+  await setDoc(chatRef, {
+    participants: sortedIds,
+    buyerId,
+    sellerId,
+    buyerName: product.buyerName || 'Buyer',
+    sellerName: product.sellerName || 'Seller',
+    productId: product.id,
+    productTitle: product.title || '',
+    productImage: product.imageUrl || '',
+    productPrice: product.price || 0,
+    lastMessage: '',
+    lastMessageAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+  }, { merge: true });
+  console.log('[Chat] Chat ready:', chatId);
 
   return chatId;
 }
@@ -146,6 +142,7 @@ export function subscribeToMessages(chatId, callback) {
  */
 export function subscribeToUserChats(userId, callback) {
   const chatsRef = collection(db, 'chats');
+  const queryKey = `chats:user:${userId}:lastMessageAtDesc`;
   const primaryQ = query(
     chatsRef,
     where('participants', 'array-contains', userId),
@@ -157,35 +154,50 @@ export function subscribeToUserChats(userId, callback) {
     where('participants', 'array-contains', userId)
   );
 
+  const sortChats = (docs) => docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => {
+      const aMs = a?.lastMessageAt?.toMillis?.() ?? 0;
+      const bMs = b?.lastMessageAt?.toMillis?.() ?? 0;
+      return bMs - aMs;
+    });
+
+  const subscribeToFallback = () => onSnapshot(fallbackQ, (snapshot) => {
+    callback(sortChats(snapshot.docs), null);
+  }, (error) => {
+    callback([], error);
+  });
+
+  if (missingIndexQueryKeys.has(queryKey)) {
+    return subscribeToFallback();
+  }
+
+  let fallbackUnsubscribe = null;
+  let primaryFailedWithMissingIndex = false;
   const unsubscribe = onSnapshot(primaryQ, (snapshot) => {
     const chats = snapshot.docs.map(d => ({
       id: d.id,
       ...d.data(),
     }));
     callback(chats);
-  }, async (error) => {
-    console.error('[Chat] subscribeToUserChats error:', error.message);
+  }, (error) => {
     if (!needsIndex(error)) {
+      console.error('[Chat] subscribeToUserChats error:', error.message);
       callback([], error);
       return;
     }
-    safeUnsubscribe(unsubscribe);
-    try {
-      const snap = await getDocs(fallbackQ);
-      const chats = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => {
-          const aMs = a?.lastMessageAt?.toMillis?.() ?? 0;
-          const bMs = b?.lastMessageAt?.toMillis?.() ?? 0;
-          return bMs - aMs;
-        });
-      callback(chats, null);
-    } catch (fallbackError) {
-      callback([], fallbackError);
+    primaryFailedWithMissingIndex = true;
+    if (!missingIndexQueryKeys.has(queryKey)) {
+      missingIndexQueryKeys.add(queryKey);
+      console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
     }
+    if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
   });
 
-  return () => safeUnsubscribe(unsubscribe);
+  return () => {
+    if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
+    safeUnsubscribe(fallbackUnsubscribe);
+  };
 }
 
 // ─────────────────────────────────────────────

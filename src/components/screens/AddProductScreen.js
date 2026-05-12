@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 
 const MAX_IMAGES = 5;
 const PUBLISH_TIMEOUT_MS = 8000;
+const IMAGE_UPLOAD_TIMEOUT_MS = 12000;
 
 function withPublishTimeout(promise) {
   let timeoutId;
@@ -21,9 +22,28 @@ function withPublishTimeout(promise) {
   ]).finally(() => clearTimeout(timeoutId));
 }
 
+function withUploadTimeout(promise) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Image upload timed out.')), IMAGE_UPLOAD_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+function fileToPreviewUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not preview this image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function AddProductScreen({ onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -49,8 +69,8 @@ export default function AddProductScreen({ onNavigate }) {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleImageUpload = async (event) => {
-    const selectedFiles = Array.from(event.target.files || []);
+  const handleImageFiles = async (fileList) => {
+    const selectedFiles = Array.from(fileList || []);
     if (selectedFiles.length === 0) return;
 
     setError('');
@@ -81,18 +101,60 @@ export default function AddProductScreen({ onNavigate }) {
 
     setUploadingImages(true);
     try {
-      const uploadedUrls = await Promise.all(filesToUpload.map(uploadProductImage));
-      setImages((prev) => [...prev, ...uploadedUrls].slice(0, MAX_IMAGES));
-      toast.success(`${uploadedUrls.length} image${uploadedUrls.length > 1 ? 's' : ''} uploaded!`);
+      const uploadResults = await Promise.allSettled(
+        filesToUpload.map((file) => withUploadTimeout(uploadProductImage(file)))
+      );
+      const uploadedUrls = uploadResults
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value);
+
+      if (uploadedUrls.length > 0) {
+        setImages((prev) => [...prev, ...uploadedUrls].slice(0, MAX_IMAGES));
+        toast.success(`${uploadedUrls.length} image${uploadedUrls.length > 1 ? 's' : ''} uploaded!`);
+        return;
+      }
+
+      uploadResults.forEach((result) => {
+        if (result.status === 'rejected') {
+          console.warn('Image upload unavailable, using local preview:', result.reason?.message || result.reason);
+        }
+      });
+
+      const previewUrls = await Promise.all(filesToUpload.map(fileToPreviewUrl));
+      setImages((prev) => [...prev, ...previewUrls].slice(0, MAX_IMAGES));
+      toast.success('Image added as a local preview. Deploy storage rules to make uploads permanent.');
     } catch (err) {
       console.error('Image upload failed:', err);
-      const message = err.userMessage || err.message || 'Image upload failed. Please try again.';
+      const message = err.userMessage || err.message || 'Could not add this image. Please try another file.';
       setError(message);
       toast.error(message);
     } finally {
       setUploadingImages(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleImageUpload = (event) => {
+    handleImageFiles(event.target.files);
+  };
+
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    if (!loading && !uploadingImages && images.length < MAX_IMAGES) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (event) => {
+    event.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setIsDragging(false);
+    if (loading || uploadingImages || images.length >= MAX_IMAGES) return;
+    handleImageFiles(event.dataTransfer.files);
   };
 
   const removeImage = (imageUrl) => {
@@ -226,29 +288,48 @@ export default function AddProductScreen({ onNavigate }) {
               onChange={handleImageUpload}
               disabled={loading || uploadingImages || images.length >= MAX_IMAGES}
             />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className={`sell-upload-btn ${images.length > 0 ? 'sell-upload-btn--done' : ''}`}
-              disabled={loading || uploadingImages || images.length >= MAX_IMAGES}
+            <div
+              className={`sell-dropzone ${isDragging ? 'sell-dropzone--dragging' : ''} ${images.length > 0 ? 'sell-dropzone--has-images' : ''}`}
+              onClick={() => {
+                if (loading || uploadingImages || images.length >= MAX_IMAGES) return;
+                fileInputRef.current?.click();
+              }}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  if (loading || uploadingImages || images.length >= MAX_IMAGES) return;
+                  fileInputRef.current?.click();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-disabled={loading || uploadingImages || images.length >= MAX_IMAGES}
             >
               {uploadingImages ? (
                 <>
-                  <Loader2 size={18} strokeWidth={2.5} className="animate-spin" />
-                  Uploading images...
+                  <Loader2 size={28} strokeWidth={2.5} className="animate-spin" />
+                  <span className="sell-dropzone-title">Uploading images...</span>
+                  <span className="sell-dropzone-hint">Please keep this tab open</span>
                 </>
               ) : images.length > 0 ? (
                 <>
-                  <Check size={18} strokeWidth={2.5} />
-                  {images.length} Image{images.length > 1 ? 's' : ''} Uploaded
+                  <Check size={28} strokeWidth={2.5} />
+                  <span className="sell-dropzone-title">{images.length} image{images.length > 1 ? 's' : ''} uploaded</span>
+                  <span className="sell-dropzone-hint">
+                    {images.length >= MAX_IMAGES ? 'Maximum images added' : 'Drop more images here or tap to add'}
+                  </span>
                 </>
               ) : (
                 <>
-                  <ImagePlus size={18} strokeWidth={2} />
-                  Upload Product Images
+                  <ImagePlus size={32} strokeWidth={2} />
+                  <span className="sell-dropzone-title">Drag & drop product images</span>
+                  <span className="sell-dropzone-hint">or tap to browse JPG, PNG, or WebP files</span>
                 </>
               )}
-            </button>
+            </div>
             {images.length > 0 && (
               <div className="sell-thumb-grid">
                 {images.map((img, index) => (
@@ -395,16 +476,51 @@ export default function AddProductScreen({ onNavigate }) {
         .sell-row { display: grid; grid-template-columns: 1fr; gap: 24px; }
         @media (min-width: 640px) { .sell-row { grid-template-columns: 1fr 1fr; } }
 
-        .sell-upload-btn {
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          width: 100%; height: 46px; border-radius: 10px;
-          font-size: 14px; font-weight: 600; cursor: pointer;
-          transition: all 0.15s ease; background: #2563EB; color: #FFFFFF; border: none;
+        .sell-dropzone {
+          min-height: 150px;
+          border: 2px dashed #CBD5E1;
+          border-radius: 16px;
+          background: linear-gradient(180deg, #FFFFFF, #F8FAFC);
+          color: #2563EB;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 22px 16px;
+          text-align: center;
+          cursor: pointer;
+          transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
         }
-        .sell-upload-btn:hover { background: #1D4ED8; }
-        .sell-upload-btn--done { background: #10B981; }
-        .sell-upload-btn--done:hover { background: #059669; }
-        .sell-upload-btn:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
+        .sell-dropzone:hover,
+        .sell-dropzone:focus-visible,
+        .sell-dropzone--dragging {
+          border-color: #2563EB;
+          background: #EFF6FF;
+          outline: none;
+        }
+        .sell-dropzone--dragging {
+          transform: scale(1.01);
+        }
+        .sell-dropzone--has-images {
+          border-color: #34D399;
+          color: #059669;
+          background: #F0FDF4;
+        }
+        .sell-dropzone[aria-disabled="true"] {
+          opacity: 0.65;
+          cursor: not-allowed;
+        }
+        .sell-dropzone-title {
+          font-size: 15px;
+          font-weight: 700;
+          color: #0F172A;
+        }
+        .sell-dropzone-hint {
+          font-size: 13px;
+          color: #64748B;
+          line-height: 1.45;
+        }
 
         .sell-thumb-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
         .sell-thumb-wrap { position: relative; min-width: 0; }
@@ -555,8 +671,12 @@ export default function AddProductScreen({ onNavigate }) {
           .sell-title { font-size: 23px; }
           .sell-form { gap: 18px; }
           .sell-row { gap: 18px; }
-          .sell-input, .sell-textarea, .sell-select, .sell-upload-btn {
+          .sell-input, .sell-textarea, .sell-select {
             font-size: 16px;
+          }
+          .sell-dropzone {
+            min-height: 132px;
+            padding: 18px 12px;
           }
           .sell-thumb-grid { grid-template-columns: repeat(2, 1fr); }
           .sell-submit {

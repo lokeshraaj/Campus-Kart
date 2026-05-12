@@ -30,7 +30,6 @@ import {
   onSnapshot,
   doc,
   getDoc,
-  getDocs,
   setDoc,
   deleteDoc,
   serverTimestamp,
@@ -78,6 +77,14 @@ function needsIndex(error) {
   return error.code === 'failed-precondition' && msg.includes('index');
 }
 
+const missingIndexQueryKeys = new Set();
+
+function warnMissingIndexOnce(key, label) {
+  if (missingIndexQueryKeys.has(key)) return;
+  missingIndexQueryKeys.add(key);
+  console.warn(`[RT] ${label} is missing a Firestore index. Using client-side sorted fallback for this session.`);
+}
+
 function sortByCreatedAtDesc(items) {
   return [...items].sort((a, b) => {
     const aMs = a?.createdAt?.toMillis?.() ?? 0;
@@ -113,6 +120,7 @@ function safeUnsubscribe(unsub) {
  */
 export function subscribeToRecentlyAdded(limitCount, callback) {
   try {
+    const queryKey = 'products:active:createdAtDesc';
     const primaryQ = query(
       collection(db, 'products'),
       where('status', '==', 'active'),
@@ -126,7 +134,23 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
       limit(limitCount * 3)
     );
 
+    const subscribeToFallback = () => onSnapshot(
+      fallbackQ,
+      (snapshot) => {
+        const products = sortByCreatedAtDesc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        ).slice(0, limitCount);
+        callback(products, null);
+      },
+      (fallbackError) => callback([], fallbackError)
+    );
+
+    if (missingIndexQueryKeys.has(queryKey)) {
+      return subscribeToFallback();
+    }
+
     let fallbackUnsubscribe = null;
+    let primaryFailedWithMissingIndex = false;
     const unsubscribe = onSnapshot(
       primaryQ,
       (snapshot) => {
@@ -134,26 +158,18 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
         callback(products, null);
       },
       (error) => {
-        console.error('[RT] subscribeToRecentlyAdded error:', error.message);
         if (!needsIndex(error)) {
+          console.error('[RT] subscribeToRecentlyAdded error:', error.message);
           callback([], error);
           return;
         }
-        safeUnsubscribe(unsubscribe);
-        fallbackUnsubscribe = onSnapshot(
-          fallbackQ,
-          (snapshot) => {
-            const products = sortByCreatedAtDesc(
-              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-            ).slice(0, limitCount);
-            callback(products, null);
-          },
-          (fallbackError) => callback([], fallbackError)
-        );
+        primaryFailedWithMissingIndex = true;
+        warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
+        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
       }
     );
     return () => {
-      safeUnsubscribe(unsubscribe);
+      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
     };
   } catch (error) {
@@ -172,6 +188,7 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
  */
 export function subscribeToBestDeals(limitCount, callback) {
   try {
+    const queryKey = 'products:active:priceAsc';
     const primaryQ = query(
       collection(db, 'products'),
       where('status', '==', 'active'),
@@ -185,7 +202,23 @@ export function subscribeToBestDeals(limitCount, callback) {
       limit(limitCount * 3)
     );
 
+    const subscribeToFallback = () => onSnapshot(
+      fallbackQ,
+      (snapshot) => {
+        const products = sortByPriceAsc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        ).slice(0, limitCount);
+        callback(products, null);
+      },
+      (fallbackError) => callback([], fallbackError)
+    );
+
+    if (missingIndexQueryKeys.has(queryKey)) {
+      return subscribeToFallback();
+    }
+
     let fallbackUnsubscribe = null;
+    let primaryFailedWithMissingIndex = false;
     const unsubscribe = onSnapshot(
       primaryQ,
       (snapshot) => {
@@ -193,26 +226,18 @@ export function subscribeToBestDeals(limitCount, callback) {
         callback(products, null);
       },
       (error) => {
-        console.error('[RT] subscribeToBestDeals error:', error.message);
         if (!needsIndex(error)) {
+          console.error('[RT] subscribeToBestDeals error:', error.message);
           callback([], error);
           return;
         }
-        safeUnsubscribe(unsubscribe);
-        fallbackUnsubscribe = onSnapshot(
-          fallbackQ,
-          (snapshot) => {
-            const products = sortByPriceAsc(
-              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-            ).slice(0, limitCount);
-            callback(products, null);
-          },
-          (fallbackError) => callback([], fallbackError)
-        );
+        primaryFailedWithMissingIndex = true;
+        warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
+        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
       }
     );
     return () => {
-      safeUnsubscribe(unsubscribe);
+      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
     };
   } catch (error) {
@@ -231,6 +256,7 @@ export function subscribeToBestDeals(limitCount, callback) {
  */
 export function subscribeToMyListings(userId, callback) {
   try {
+    const queryKey = `products:user:${userId}:active:createdAtDesc`;
     const primaryQ = query(
       collection(db, 'products'),
       where('userId', '==', userId),
@@ -244,7 +270,23 @@ export function subscribeToMyListings(userId, callback) {
       where('status', '==', 'active')
     );
 
+    const subscribeToFallback = () => onSnapshot(
+      fallbackQ,
+      (snapshot) => {
+        const products = sortByCreatedAtDesc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        );
+        callback(products, null);
+      },
+      (fallbackError) => callback([], fallbackError)
+    );
+
+    if (missingIndexQueryKeys.has(queryKey)) {
+      return subscribeToFallback();
+    }
+
     let fallbackUnsubscribe = null;
+    let primaryFailedWithMissingIndex = false;
     const unsubscribe = onSnapshot(
       primaryQ,
       (snapshot) => {
@@ -252,26 +294,18 @@ export function subscribeToMyListings(userId, callback) {
         callback(products, null);
       },
       (error) => {
-        console.error('[RT] subscribeToMyListings error:', error.message);
         if (!needsIndex(error)) {
+          console.error('[RT] subscribeToMyListings error:', error.message);
           callback([], error);
           return;
         }
-        safeUnsubscribe(unsubscribe);
-        fallbackUnsubscribe = onSnapshot(
-          fallbackQ,
-          (snapshot) => {
-            const products = sortByCreatedAtDesc(
-              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-            );
-            callback(products, null);
-          },
-          (fallbackError) => callback([], fallbackError)
-        );
+        primaryFailedWithMissingIndex = true;
+        warnMissingIndexOnce(queryKey, 'subscribeToMyListings');
+        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
       }
     );
     return () => {
-      safeUnsubscribe(unsubscribe);
+      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
     };
   } catch (error) {
@@ -290,6 +324,7 @@ export function subscribeToMyListings(userId, callback) {
  */
 export function subscribeToSoldItems(userId, callback) {
   try {
+    const queryKey = `products:user:${userId}:sold:createdAtDesc`;
     const primaryQ = query(
       collection(db, 'products'),
       where('userId', '==', userId),
@@ -303,32 +338,42 @@ export function subscribeToSoldItems(userId, callback) {
       where('status', '==', 'sold')
     );
 
+    const subscribeToFallback = () => onSnapshot(
+      fallbackQ,
+      (snapshot) => {
+        const products = sortByCreatedAtDesc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        );
+        callback(products, null);
+      },
+      (fallbackError) => callback([], fallbackError)
+    );
+
+    if (missingIndexQueryKeys.has(queryKey)) {
+      return subscribeToFallback();
+    }
+
     let fallbackUnsubscribe = null;
+    let primaryFailedWithMissingIndex = false;
     const unsubscribe = onSnapshot(
       primaryQ,
       (snapshot) => {
         const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         callback(products, null);
       },
-      async (error) => {
-        console.error('[RT] subscribeToSoldItems error:', error.message);
+      (error) => {
         if (!needsIndex(error)) {
+          console.error('[RT] subscribeToSoldItems error:', error.message);
           callback([], error);
           return;
         }
-        try {
-          const snap = await getDocs(fallbackQ);
-          const products = sortByCreatedAtDesc(
-            snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-          );
-          callback(products, null);
-        } catch (fallbackError) {
-          callback([], fallbackError);
-        }
+        primaryFailedWithMissingIndex = true;
+        warnMissingIndexOnce(queryKey, 'subscribeToSoldItems');
+        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
       }
     );
     return () => {
-      safeUnsubscribe(unsubscribe);
+      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
     };
   } catch (error) {
