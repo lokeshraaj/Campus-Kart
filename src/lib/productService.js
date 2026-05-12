@@ -211,10 +211,10 @@ export async function markAsSold(productId) {
     if (!chatsSnapshot.empty) {
       const chatBatch = writeBatch(db);
       chatsSnapshot.docs.forEach((chatDoc) => {
-        chatBatch.update(chatDoc.ref, {
+        chatBatch.set(chatDoc.ref, {
           productStatus: 'sold',
           soldAt: serverTimestamp(),
-        });
+        }, { merge: true });
       });
       await chatBatch.commit();
     }

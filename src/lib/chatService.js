@@ -32,6 +32,11 @@ function needsIndex(error) {
   return error.code === 'failed-precondition' && msg.includes('index');
 }
 
+function isFirestoreInternalError(error) {
+  const msg = (error?.message || '').toLowerCase();
+  return msg.includes('internal assertion failed') || msg.includes('unexpected state');
+}
+
 const missingIndexQueryKeys = new Set();
 
 function safeUnsubscribe(unsub) {
@@ -239,25 +244,43 @@ export function subscribeToUserChats(userId, callback) {
 
   let fallbackUnsubscribe = null;
   let primaryFailedWithMissingIndex = false;
-  const unsubscribe = onSnapshot(primaryQ, (snapshot) => {
-    const chats = snapshot.docs.map(d => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    callback(chats);
-  }, (error) => {
-    if (!needsIndex(error)) {
-      console.error('[Chat] subscribeToUserChats error:', error.message);
+  let unsubscribe = null;
+  try {
+    unsubscribe = onSnapshot(primaryQ, (snapshot) => {
+      const chats = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data(),
+      }));
+      callback(chats);
+    }, (error) => {
+      if (!needsIndex(error) && !isFirestoreInternalError(error)) {
+        console.error('[Chat] subscribeToUserChats error:', error.message);
+        callback([], error);
+        return;
+      }
+      primaryFailedWithMissingIndex = true;
+      if (!missingIndexQueryKeys.has(queryKey)) {
+        missingIndexQueryKeys.add(queryKey);
+        console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
+      }
+      if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
+    });
+  } catch (error) {
+    if (!needsIndex(error) && !isFirestoreInternalError(error)) {
+      console.error('[Chat] subscribeToUserChats setup error:', error.message);
       callback([], error);
-      return;
+      return () => {};
     }
     primaryFailedWithMissingIndex = true;
     if (!missingIndexQueryKeys.has(queryKey)) {
       missingIndexQueryKeys.add(queryKey);
       console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
     }
-    if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
-  });
+    getDocs(fallbackQ)
+      .then((snapshot) => callback(sortChats(snapshot.docs), null))
+      .catch((fallbackError) => callback([], fallbackError));
+    unsubscribe = () => {};
+  }
 
   return () => {
     if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);

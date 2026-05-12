@@ -30,6 +30,7 @@ import {
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   deleteDoc,
   serverTimestamp,
@@ -75,6 +76,11 @@ function needsIndex(error) {
   if (!error) return false;
   const msg = (error.message || '').toLowerCase();
   return error.code === 'failed-precondition' && msg.includes('index');
+}
+
+function isFirestoreInternalError(error) {
+  const msg = (error?.message || '').toLowerCase();
+  return msg.includes('internal assertion failed') || msg.includes('unexpected state');
 }
 
 const missingIndexQueryKeys = new Set();
@@ -151,23 +157,36 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
 
     let fallbackUnsubscribe = null;
     let primaryFailedWithMissingIndex = false;
-    const unsubscribe = onSnapshot(
-      primaryQ,
-      (snapshot) => {
-        const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-        callback(products, null);
-      },
-      (error) => {
-        if (!needsIndex(error)) {
-          console.error('[RT] subscribeToRecentlyAdded error:', error.message);
-          callback([], error);
-          return;
+    let unsubscribe = null;
+    try {
+      unsubscribe = onSnapshot(
+        primaryQ,
+        (snapshot) => {
+          const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+          callback(products, null);
+        },
+        async (error) => {
+          if (!needsIndex(error) && !isFirestoreInternalError(error)) {
+            console.error('[RT] subscribeToRecentlyAdded error:', error.message);
+            callback([], error);
+            return;
+          }
+          primaryFailedWithMissingIndex = true;
+          warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
+          if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
         }
-        primaryFailedWithMissingIndex = true;
-        warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
-        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
-      }
-    );
+      );
+    } catch (error) {
+      if (!needsIndex(error) && !isFirestoreInternalError(error)) throw error;
+      primaryFailedWithMissingIndex = true;
+      warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
+      getDocs(fallbackQ)
+        .then((snapshot) => callback(sortByCreatedAtDesc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        ).slice(0, limitCount), null))
+        .catch((fallbackError) => callback([], fallbackError));
+      unsubscribe = () => {};
+    }
     return () => {
       if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
@@ -182,8 +201,8 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
 /**
  * Subscribe to the cheapest active products (best deals).
  *
- * @param {number}   limitCount – Max items to stream
- * @param {function} callback   – Receives `(products[], error?)`
+ * @param {number}   limitCount - Max items to stream
+ * @param {function} callback   - Receives `(products[], error?)`
  * @returns {function} unsubscribe
  */
 export function subscribeToBestDeals(limitCount, callback) {
@@ -219,23 +238,36 @@ export function subscribeToBestDeals(limitCount, callback) {
 
     let fallbackUnsubscribe = null;
     let primaryFailedWithMissingIndex = false;
-    const unsubscribe = onSnapshot(
-      primaryQ,
-      (snapshot) => {
-        const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-        callback(products, null);
-      },
-      (error) => {
-        if (!needsIndex(error)) {
-          console.error('[RT] subscribeToBestDeals error:', error.message);
-          callback([], error);
-          return;
+    let unsubscribe = null;
+    try {
+      unsubscribe = onSnapshot(
+        primaryQ,
+        (snapshot) => {
+          const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+          callback(products, null);
+        },
+        (error) => {
+          if (!needsIndex(error) && !isFirestoreInternalError(error)) {
+            console.error('[RT] subscribeToBestDeals error:', error.message);
+            callback([], error);
+            return;
+          }
+          primaryFailedWithMissingIndex = true;
+          warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
+          if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
         }
-        primaryFailedWithMissingIndex = true;
-        warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
-        if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
-      }
-    );
+      );
+    } catch (error) {
+      if (!needsIndex(error) && !isFirestoreInternalError(error)) throw error;
+      primaryFailedWithMissingIndex = true;
+      warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
+      getDocs(fallbackQ)
+        .then((snapshot) => callback(sortByPriceAsc(
+          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+        ).slice(0, limitCount), null))
+        .catch((fallbackError) => callback([], fallbackError));
+      unsubscribe = () => {};
+    }
     return () => {
       if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
       safeUnsubscribe(fallbackUnsubscribe);
@@ -505,7 +537,7 @@ export async function isProductSaved(userId, productId) {
         isOfflineThrottled = true;
         setTimeout(() => { isOfflineThrottled = false; }, 30000); // Reset after 30s
       }
-    } else {
+    } else if (!isFirestoreInternalError(error)) {
       console.error('[RT] isProductSaved failed:', error.message);
     }
     return false;
@@ -726,25 +758,6 @@ export function useSaveToggle(userId, product) {
     if (!userId || !productId) return;
 
     isProductSaved(userId, productId).then(setIsSaved);
-  }, [userId, productId]);
-
-  // Subscribe to changes (so other tabs / devices stay in sync)
-  useEffect(() => {
-    if (!userId || !productId) return;
-
-    let unsubscribe;
-    try {
-      const savedDocRef = doc(db, 'users', userId, 'savedItems', productId);
-      unsubscribe = onSnapshot(
-        savedDocRef,
-        (snap) => setIsSaved(snap.exists()),
-        (err) => console.warn('[Hook] save sync listener error:', err.message)
-      );
-    } catch (err) {
-      console.warn('[Hook] save sync setup skipped:', err.message);
-    }
-
-    return () => safeUnsubscribe(unsubscribe);
   }, [userId, productId]);
 
   const toggle = useCallback(async () => {
