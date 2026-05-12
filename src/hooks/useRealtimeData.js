@@ -10,9 +10,9 @@
 // ┌─────────────────────────────────────────────────────┐
 // │ Collection  │ Fields                                │
 // ├─────────────┼───────────────────────────────────────┤
-// │ products    │ status ASC, createdAt DESC            │
+// │ products    │ status ASC, createdAt ASC             │
 // │ products    │ status ASC, price ASC                 │
-// │ products    │ userId ASC, status ASC, createdAt DESC│
+// │ products    │ userId ASC, status ASC                │
 // └─────────────────────────────────────────────────────┘
 // Firestore will also print the exact index creation URL
 // in the browser console if a query hits a missing index.
@@ -130,7 +130,7 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
     const primaryQ = query(
       collection(db, 'products'),
       where('status', '==', 'active'),
-      orderBy('createdAt', 'desc'),
+      orderBy('createdAt', 'asc'),
       limit(limitCount)
     );
 
@@ -162,7 +162,9 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
       unsubscribe = onSnapshot(
         primaryQ,
         (snapshot) => {
-          const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const products = sortByCreatedAtDesc(
+            snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+          ).slice(0, limitCount);
           callback(products, null);
         },
         async (error) => {
@@ -288,12 +290,12 @@ export function subscribeToBestDeals(limitCount, callback) {
  */
 export function subscribeToMyListings(userId, callback) {
   try {
-    const queryKey = `products:user:${userId}:active:createdAtDesc`;
+    const queryKey = `products:user:${userId}:active:createdAtAsc`;
     const primaryQ = query(
       collection(db, 'products'),
       where('userId', '==', userId),
       where('status', '==', 'active'),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'asc')
     );
 
     const fallbackQ = query(
