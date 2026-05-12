@@ -126,6 +126,7 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
       limit(limitCount * 3)
     );
 
+    let fallbackUnsubscribe = null;
     const unsubscribe = onSnapshot(
       primaryQ,
       (snapshot) => {
@@ -153,6 +154,7 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
     );
     return () => {
       safeUnsubscribe(unsubscribe);
+      safeUnsubscribe(fallbackUnsubscribe);
     };
   } catch (error) {
     console.error('[RT] subscribeToRecentlyAdded setup failed:', error.message);

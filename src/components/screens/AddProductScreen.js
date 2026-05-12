@@ -6,6 +6,8 @@ import { addProduct } from '@/lib/productService';
 import { getCurrentUser } from '@/lib/authService';
 import toast from 'react-hot-toast';
 
+const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET?.trim();
+
 export default function AddProductScreen({ onNavigate }) {
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -142,7 +144,7 @@ export default function AddProductScreen({ onNavigate }) {
           <div className="sell-field">
             <label className="sell-label">Product Images * (up to 5)</label>
             <CldUploadWidget
-              uploadPreset="campuskart_uploads"
+              uploadPreset={CLOUDINARY_UPLOAD_PRESET}
               options={{
                 maxFiles: 5,
                 clientAllowedFormats: ['jpg', 'jpeg', 'png', 'webp'],
@@ -150,6 +152,14 @@ export default function AddProductScreen({ onNavigate }) {
                 maxImageWidth: 1200,
                 maxImageHeight: 1200,
                 maxFileSize: 5000000,
+              }}
+              onError={(err) => {
+                const message = CLOUDINARY_UPLOAD_PRESET
+                  ? 'Image upload failed. Please try again.'
+                  : 'Cloudinary upload is not configured for this deployment.';
+                console.error('Cloudinary upload failed:', err);
+                setError(message);
+                toast.error(message);
               }}
               onSuccess={(result) => {
                 const url = result?.info?.secure_url;
@@ -164,7 +174,16 @@ export default function AddProductScreen({ onNavigate }) {
               {({ open }) => (
                 <button
                   type="button"
-                  onClick={(e) => { e.preventDefault(); open(); }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (!CLOUDINARY_UPLOAD_PRESET) {
+                      const message = 'Cloudinary upload is not configured for this deployment.';
+                      setError(message);
+                      toast.error(message);
+                      return;
+                    }
+                    open();
+                  }}
                   className={`sell-upload-btn ${images.length > 0 ? 'sell-upload-btn--done' : ''}`}
                 >
                   {images.length > 0 ? (
