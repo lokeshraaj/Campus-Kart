@@ -7,6 +7,19 @@ import { uploadProductImage } from '@/lib/storageService';
 import toast from 'react-hot-toast';
 
 const MAX_IMAGES = 5;
+const PUBLISH_TIMEOUT_MS = 8000;
+
+function withPublishTimeout(promise) {
+  let timeoutId;
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve({ timedOut: true }), PUBLISH_TIMEOUT_MS);
+  });
+
+  return Promise.race([
+    promise.then((value) => ({ value, timedOut: false })),
+    timeout,
+  ]).finally(() => clearTimeout(timeoutId));
+}
 
 export default function AddProductScreen({ onNavigate }) {
   const [loading, setLoading] = useState(false);
@@ -114,26 +127,34 @@ export default function AddProductScreen({ onNavigate }) {
 
     setLoading(true);
 
-    try {
-      await addProduct({
-        title: title.trim(),
-        price: Number(price),
-        description: description.trim(),
-        category,
-        condition,
-        images,
-        imageUrl: images[0],
-        location: location.trim(),
-      });
+    const publishPromise = addProduct({
+      title: title.trim(),
+      price: Number(price),
+      description: description.trim(),
+      category,
+      condition,
+      images,
+      imageUrl: images[0],
+      location: location.trim(),
+    });
 
-      setLoading(false);
+    try {
+      const result = await withPublishTimeout(publishPromise);
+
+      if (result.timedOut) {
+        publishPromise.catch((err) => {
+          console.error('Post eventually failed after the UI was released:', err);
+        });
+        toast.success('Listing submitted. It may take a moment to finish syncing.');
+      }
       setShowSuccess(true);
     } catch (err) {
       console.error('Post failed:', err);
-      setLoading(false);
       const message = err.userMessage || err.message || 'Failed to post item. Please try again.';
       setError(message);
       toast.error(message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -296,9 +317,11 @@ export default function AddProductScreen({ onNavigate }) {
         </div>
 
         {/* Submit */}
-        <button className="sell-submit" onClick={handlePost} disabled={loading}>
+        <button className="sell-submit" onClick={handlePost} disabled={loading || uploadingImages}>
           {loading ? (
             <><Loader2 size={18} strokeWidth={2.5} className="animate-spin" /> Publishing…</>
+          ) : uploadingImages ? (
+            <><Loader2 size={18} strokeWidth={2.5} className="animate-spin" /> Uploading Images…</>
           ) : (
             'Post Item'
           )}
