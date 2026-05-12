@@ -1,12 +1,13 @@
 'use client';
+import { Home, Search, PlusSquare, MessageCircle, User } from 'lucide-react';
 
 export default function BottomNav({ activeTab, onTabChange }) {
   const tabs = [
-    { id: 'home', icon: '🏠', label: 'Home' },
-    { id: 'search', icon: '🔍', label: 'Search' },
-    { id: 'add', icon: '+', label: 'Add', isCenter: true },
-    { id: 'chats', icon: '💬', label: 'Chats' },
-    { id: 'profile', icon: '👤', label: 'Profile' },
+    { id: 'home', icon: <Home size={20} strokeWidth={2} />, label: 'Home' },
+    { id: 'search', icon: <Search size={20} strokeWidth={2} />, label: 'Search' },
+    { id: 'add', icon: <PlusSquare size={20} strokeWidth={2} />, label: 'Add', isCenter: true },
+    { id: 'chats', icon: <MessageCircle size={20} strokeWidth={2} />, label: 'Chats' },
+    { id: 'profile', icon: <User size={20} strokeWidth={2} />, label: 'Profile' },
   ];
 
   return (
@@ -22,7 +23,7 @@ export default function BottomNav({ activeTab, onTabChange }) {
               aria-label="Add new product"
             >
               <div className="nav-add-btn">
-                <span>+</span>
+                <PlusSquare size={24} strokeWidth={2} />
               </div>
             </button>
           );

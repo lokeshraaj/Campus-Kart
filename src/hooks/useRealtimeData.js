@@ -30,6 +30,7 @@ import {
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   deleteDoc,
   serverTimestamp,
@@ -71,6 +72,33 @@ function getUserMessage(error) {
   return null; // no special message
 }
 
+function needsIndex(error) {
+  if (!error) return false;
+  const msg = (error.message || '').toLowerCase();
+  return error.code === 'failed-precondition' && msg.includes('index');
+}
+
+function sortByCreatedAtDesc(items) {
+  return [...items].sort((a, b) => {
+    const aMs = a?.createdAt?.toMillis?.() ?? 0;
+    const bMs = b?.createdAt?.toMillis?.() ?? 0;
+    return bMs - aMs;
+  });
+}
+
+function sortByPriceAsc(items) {
+  return [...items].sort((a, b) => (Number(a?.price) || 0) - (Number(b?.price) || 0));
+}
+
+function safeUnsubscribe(unsub) {
+  if (typeof unsub !== 'function') return;
+  try {
+    unsub();
+  } catch (error) {
+    console.warn('[RT] unsubscribe skipped:', error?.message || error);
+  }
+}
+
 // ─────────────────────────────────────────────
 // 1. LOW-LEVEL SUBSCRIBE FUNCTIONS
 //    (callback-based, return unsubscribe fn)
@@ -85,24 +113,47 @@ function getUserMessage(error) {
  */
 export function subscribeToRecentlyAdded(limitCount, callback) {
   try {
-    const q = query(
+    const primaryQ = query(
       collection(db, 'products'),
       where('status', '==', 'active'),
       orderBy('createdAt', 'desc'),
       limit(limitCount)
     );
 
-    return onSnapshot(
-      q,
+    const fallbackQ = query(
+      collection(db, 'products'),
+      where('status', '==', 'active'),
+      limit(limitCount * 3)
+    );
+
+    const unsubscribe = onSnapshot(
+      primaryQ,
       (snapshot) => {
         const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         callback(products, null);
       },
       (error) => {
         console.error('[RT] subscribeToRecentlyAdded error:', error.message);
-        callback([], error);
+        if (!needsIndex(error)) {
+          callback([], error);
+          return;
+        }
+        safeUnsubscribe(unsubscribe);
+        fallbackUnsubscribe = onSnapshot(
+          fallbackQ,
+          (snapshot) => {
+            const products = sortByCreatedAtDesc(
+              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+            ).slice(0, limitCount);
+            callback(products, null);
+          },
+          (fallbackError) => callback([], fallbackError)
+        );
       }
     );
+    return () => {
+      safeUnsubscribe(unsubscribe);
+    };
   } catch (error) {
     console.error('[RT] subscribeToRecentlyAdded setup failed:', error.message);
     callback([], error);
@@ -119,24 +170,49 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
  */
 export function subscribeToBestDeals(limitCount, callback) {
   try {
-    const q = query(
+    const primaryQ = query(
       collection(db, 'products'),
       where('status', '==', 'active'),
       orderBy('price', 'asc'),
       limit(limitCount)
     );
 
-    return onSnapshot(
-      q,
+    const fallbackQ = query(
+      collection(db, 'products'),
+      where('status', '==', 'active'),
+      limit(limitCount * 3)
+    );
+
+    let fallbackUnsubscribe = null;
+    const unsubscribe = onSnapshot(
+      primaryQ,
       (snapshot) => {
         const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         callback(products, null);
       },
       (error) => {
         console.error('[RT] subscribeToBestDeals error:', error.message);
-        callback([], error);
+        if (!needsIndex(error)) {
+          callback([], error);
+          return;
+        }
+        safeUnsubscribe(unsubscribe);
+        fallbackUnsubscribe = onSnapshot(
+          fallbackQ,
+          (snapshot) => {
+            const products = sortByPriceAsc(
+              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+            ).slice(0, limitCount);
+            callback(products, null);
+          },
+          (fallbackError) => callback([], fallbackError)
+        );
       }
     );
+    return () => {
+      safeUnsubscribe(unsubscribe);
+      safeUnsubscribe(fallbackUnsubscribe);
+    };
   } catch (error) {
     console.error('[RT] subscribeToBestDeals setup failed:', error.message);
     callback([], error);
@@ -153,24 +229,49 @@ export function subscribeToBestDeals(limitCount, callback) {
  */
 export function subscribeToMyListings(userId, callback) {
   try {
-    const q = query(
+    const primaryQ = query(
       collection(db, 'products'),
       where('userId', '==', userId),
       where('status', '==', 'active'),
       orderBy('createdAt', 'desc')
     );
 
-    return onSnapshot(
-      q,
+    const fallbackQ = query(
+      collection(db, 'products'),
+      where('userId', '==', userId),
+      where('status', '==', 'active')
+    );
+
+    let fallbackUnsubscribe = null;
+    const unsubscribe = onSnapshot(
+      primaryQ,
       (snapshot) => {
         const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         callback(products, null);
       },
       (error) => {
         console.error('[RT] subscribeToMyListings error:', error.message);
-        callback([], error);
+        if (!needsIndex(error)) {
+          callback([], error);
+          return;
+        }
+        safeUnsubscribe(unsubscribe);
+        fallbackUnsubscribe = onSnapshot(
+          fallbackQ,
+          (snapshot) => {
+            const products = sortByCreatedAtDesc(
+              snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
+            );
+            callback(products, null);
+          },
+          (fallbackError) => callback([], fallbackError)
+        );
       }
     );
+    return () => {
+      safeUnsubscribe(unsubscribe);
+      safeUnsubscribe(fallbackUnsubscribe);
+    };
   } catch (error) {
     console.error('[RT] subscribeToMyListings setup failed:', error.message);
     callback([], error);
@@ -187,24 +288,47 @@ export function subscribeToMyListings(userId, callback) {
  */
 export function subscribeToSoldItems(userId, callback) {
   try {
-    const q = query(
+    const primaryQ = query(
       collection(db, 'products'),
       where('userId', '==', userId),
       where('status', '==', 'sold'),
       orderBy('createdAt', 'desc')
     );
 
-    return onSnapshot(
-      q,
+    const fallbackQ = query(
+      collection(db, 'products'),
+      where('userId', '==', userId),
+      where('status', '==', 'sold')
+    );
+
+    let fallbackUnsubscribe = null;
+    const unsubscribe = onSnapshot(
+      primaryQ,
       (snapshot) => {
         const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         callback(products, null);
       },
-      (error) => {
+      async (error) => {
         console.error('[RT] subscribeToSoldItems error:', error.message);
-        callback([], error);
+        if (!needsIndex(error)) {
+          callback([], error);
+          return;
+        }
+        try {
+          const snap = await getDocs(fallbackQ);
+          const products = sortByCreatedAtDesc(
+            snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+          );
+          callback(products, null);
+        } catch (fallbackError) {
+          callback([], fallbackError);
+        }
       }
     );
+    return () => {
+      safeUnsubscribe(unsubscribe);
+      safeUnsubscribe(fallbackUnsubscribe);
+    };
   } catch (error) {
     console.error('[RT] subscribeToSoldItems setup failed:', error.message);
     callback([], error);
@@ -375,7 +499,7 @@ export function useRecentlyAdded(count = 10, options = {}) {
       }
     });
 
-    return () => unsubscribe();
+    return () => safeUnsubscribe(unsubscribe);
   }, [count]);
 
   return { products, loading, error };
@@ -409,7 +533,7 @@ export function useBestDeals(count = 6, options = {}) {
       }
     });
 
-    return () => unsubscribe();
+    return () => safeUnsubscribe(unsubscribe);
   }, [count]);
 
   return { deals, loading, error };
@@ -449,7 +573,7 @@ export function useMyListings(userId, options = {}) {
       }
     });
 
-    return () => unsubscribe();
+    return () => safeUnsubscribe(unsubscribe);
   }, [userId]);
 
   return { listings, loading, error };
@@ -489,7 +613,7 @@ export function useSoldItems(userId, options = {}) {
       }
     });
 
-    return () => unsubscribe();
+    return () => safeUnsubscribe(unsubscribe);
   }, [userId]);
 
   return { soldItems, loading, error };
@@ -529,7 +653,7 @@ export function useSavedItems(userId, options = {}) {
       }
     });
 
-    return () => unsubscribe();
+    return () => safeUnsubscribe(unsubscribe);
   }, [userId]);
 
   return { savedItems, loading, error };
@@ -573,7 +697,7 @@ export function useSaveToggle(userId, product) {
       console.warn('[Hook] save sync setup skipped:', err.message);
     }
 
-    return () => unsubscribe?.();
+    return () => safeUnsubscribe(unsubscribe);
   }, [userId, productId]);
 
   const toggle = useCallback(async () => {

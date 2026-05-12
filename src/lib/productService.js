@@ -18,7 +18,10 @@ import {
   where,
   orderBy,
   serverTimestamp,
+  Timestamp,
   increment,
+  deleteField,
+  setDoc,
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 
@@ -52,11 +55,15 @@ export async function addProduct(productData) {
       description: productData.description,
       category: productData.category,
       condition: productData.condition || 'Used',
+      images: Array.isArray(productData.images) ? productData.images : [],
       imageUrl: productData.imageUrl || '',
       location: productData.location || '',
       userId: user.uid,
       sellerName: user.displayName || user.email,
-      createdAt: serverTimestamp(),
+      // Keep a concrete timestamp value so queries ordered by `createdAt`
+      // remain stable across refreshes and devices immediately after posting.
+      createdAt: Timestamp.now(),
+      createdAtServer: serverTimestamp(),
       status: 'active',
       savesCount: 0,
     };
@@ -191,13 +198,65 @@ export async function deleteProduct(productId) {
 export async function markAsSold(productId) {
   try {
     const docRef = doc(db, 'products', productId);
+    const snap = await getDoc(docRef);
+    const data = snap.exists() ? snap.data() : {};
+    const primaryImage = data?.images?.[0] || data?.imageUrl || '';
+
     await updateDoc(docRef, {
       status: 'sold',
       soldAt: serverTimestamp(),
+      // Keep sold docs lightweight: retain only one preview image.
+      imageUrl: primaryImage,
+      images: primaryImage ? [primaryImage] : deleteField(),
     });
     console.log('[DB] Product marked as sold:', productId);
   } catch (error) {
     console.error('[DB] markAsSold failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Submit or update a seller rating for a sold product.
+ * Each user can rate a seller once per product.
+ *
+ * @param {Object} payload
+ * @param {string} payload.productId
+ * @param {string} payload.sellerId
+ * @param {number} payload.rating - Integer between 1 and 5
+ * @returns {Promise<void>}
+ */
+export async function rateSeller({ productId, sellerId, rating }) {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error('You must be logged in to rate a seller.');
+    }
+    if (!productId || !sellerId) {
+      throw new Error('Missing product or seller details.');
+    }
+    if (user.uid === sellerId) {
+      throw new Error('You cannot rate yourself.');
+    }
+
+    const safeRating = Number(rating);
+    if (!Number.isInteger(safeRating) || safeRating < 1 || safeRating > 5) {
+      throw new Error('Rating must be an integer from 1 to 5.');
+    }
+
+    const ratingDocId = `${productId}_${user.uid}`;
+    const ratingRef = doc(db, 'sellerRatings', ratingDocId);
+
+    await setDoc(ratingRef, {
+      productId,
+      sellerId,
+      raterId: user.uid,
+      rating: safeRating,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('[DB] rateSeller failed:', error.message);
     throw error;
   }
 }
