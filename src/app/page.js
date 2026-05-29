@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { Home as HomeIcon, Search, PlusSquare, MessageCircle, User, ShoppingCart } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { HomeProvider } from '@/context/HomeContext';
 import { findOrCreateChat, updateUserPresence } from '@/lib/chatService';
 import BottomNav from '@/components/BottomNav';
 import HomeScreen from '@/components/screens/HomeScreen';
@@ -102,28 +103,32 @@ export default function Home() {
     };
 
     return (
-      <div className="app-shell detail-shell">
-        <ProductDetailScreen
-          product={selectedProduct}
-          onBack={() => setSelectedProduct(null)}
-          onChat={handleStartChat}
-        />
-      </div>
+      <HomeProvider userId={user.uid}>
+        <div className="app-shell detail-shell">
+          <ProductDetailScreen
+            product={selectedProduct}
+            onBack={() => setSelectedProduct(null)}
+            onChat={handleStartChat}
+          />
+        </div>
+      </HomeProvider>
     );
   }
 
   // Individual Chat view
   if (selectedChat) {
     return (
-      <div className="app-shell detail-shell">
-        <ChatScreen
-          chat={selectedChat}
-          onBack={() => {
-            setSelectedChat(null);
-            setActiveTab('chats');
-          }}
-        />
-      </div>
+      <HomeProvider userId={user.uid}>
+        <div className="app-shell detail-shell">
+          <ChatScreen
+            chat={selectedChat}
+            onBack={() => {
+              setSelectedChat(null);
+              setActiveTab('chats');
+            }}
+          />
+        </div>
+      </HomeProvider>
     );
   }
 
@@ -153,35 +158,37 @@ export default function Home() {
   ];
 
   return (
-    <div className="app-shell holy-grail-layout">
-      {/* Desktop Sidebar */}
-      <aside className="desktop-sidebar">
-        <div className="sidebar-logo">
-          <ShoppingCart size={24} strokeWidth={2} className="sidebar-logo-icon" /> CampusKart
+    <HomeProvider userId={user.uid}>
+      <div className="app-shell holy-grail-layout">
+        {/* Desktop Sidebar */}
+        <aside className="desktop-sidebar">
+          <div className="sidebar-logo">
+            <ShoppingCart size={24} strokeWidth={2} className="sidebar-logo-icon" /> CampusKart
+          </div>
+          <nav className="sidebar-nav-menu">
+            {navItems.map(item => (
+              <button
+                key={item.id}
+                className={`sidebar-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(item.id)}
+              >
+                <span className="sidebar-icon">{item.icon}</span>
+                <span className="sidebar-label">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        {/* Main Content */}
+        <main className="page-content holy-grail-main">
+          {renderScreen()}
+        </main>
+
+        {/* Mobile Bottom Nav */}
+        <div className="mobile-bottom-nav">
+          <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
         </div>
-        <nav className="sidebar-nav-menu">
-          {navItems.map(item => (
-            <button
-              key={item.id}
-              className={`sidebar-nav-item ${activeTab === item.id ? 'active' : ''}`}
-              onClick={() => setActiveTab(item.id)}
-            >
-              <span className="sidebar-icon">{item.icon}</span>
-              <span className="sidebar-label">{item.label}</span>
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      {/* Main Content */}
-      <main className="page-content holy-grail-main">
-        {renderScreen()}
-      </main>
-
-      {/* Mobile Bottom Nav */}
-      <div className="mobile-bottom-nav">
-        <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
       </div>
-    </div>
+    </HomeProvider>
   );
 }

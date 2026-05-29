@@ -1,11 +1,11 @@
 'use client';
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import { Search, Bell, GraduationCap, Flame, Sparkles, Heart, ArrowUpDown } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { useRecentlyAdded, useBestDeals, useSaveToggle } from '@/hooks/useRealtimeData';
-import { isExpiredChat, subscribeToUserChats } from '@/lib/chatService';
+import { useHomeContext } from '@/context/HomeContext';
+import { useSaveToggle } from '@/hooks/useRealtimeData';
 import { categories } from '@/data/mockData';
 
 // Tiny shimmer SVG encoded as a data URI — used as a blur placeholder
@@ -37,12 +37,12 @@ function SafeImage({ src, alt, ...props }) {
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Skeleton Shimmer UI */}
       {!isLoaded && (
-        <div 
-          className="image-placeholder-empty" 
+        <div
+          className="image-placeholder-empty"
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}
         />
       )}
-      
+
       <Image
         src={error || !src ? fallbackSrc : src}
         alt={alt || 'Image'}
@@ -99,9 +99,49 @@ function WishlistButton({ product }) {
 export default function HomeScreen({ onProductClick, onSearchClick }) {
   const { showToast } = useToast();
   const { user } = useAuth();
-  const [activeCategory, setActiveCategory] = useState('all');
-  const [sortOrder, setSortOrder] = useState(null);
-  const [notificationCount, setNotificationCount] = useState(0);
+
+  // ── All persistent state comes from HomeContext ────────────
+  const {
+    products,
+    deals,
+    productsLoading,
+    dealsLoading,
+    activeCategory,
+    setActiveCategory,
+    sortOrder,
+    cycleSortOrder,
+    scrollY,
+    setScrollY,
+    notificationCount,
+  } = useHomeContext();
+
+  // ── Scroll position restoration ────────────────────────────
+  // scrollContainerRef points to the scrollable <main> element.
+  // We walk up the DOM to find the first scrollable ancestor so
+  // this works regardless of whether the page or a wrapper scrolls.
+  const scrollRestoredRef = useRef(false);
+
+  useEffect(() => {
+    // Restore saved scroll position on mount (one-shot)
+    if (!scrollRestoredRef.current && scrollY > 0) {
+      // Use requestAnimationFrame to ensure the DOM has painted
+      const raf = requestAnimationFrame(() => {
+        window.scrollTo({ top: scrollY, behavior: 'instant' });
+        scrollRestoredRef.current = true;
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    scrollRestoredRef.current = true;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // Save scroll position when HomeScreen unmounts
+    return () => {
+      setScrollY(window.scrollY);
+    };
+  }, [setScrollY]);
+
+  // ── Notification toast ─────────────────────────────────────
   const handleNotificationClick = () => {
     const message = notificationCount > 0
       ? `You have ${notificationCount} recent message ${notificationCount === 1 ? 'notification' : 'notifications'}. Open Messages to reply.`
@@ -109,45 +149,7 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
     showToast(message, 'info', 3000);
   };
 
-  // Toast handler for real-time errors
-  const handleRealtimeError = useCallback((msg) => {
-    showToast(msg, 'info', 5000);
-  }, [showToast]);
-
-  useEffect(() => {
-    if (!user?.uid) {
-      setNotificationCount(0);
-      return;
-    }
-
-    const unsubscribe = subscribeToUserChats(user.uid, (chatData) => {
-      const count = chatData.filter((chat) => (
-        !isExpiredChat(chat) &&
-        chat.lastMessage &&
-        chat.lastMessageSenderId !== user.uid
-      )).length;
-      setNotificationCount(count);
-    });
-
-    return () => unsubscribe();
-  }, [user?.uid]);
-
-  // ── Real-time feeds from Firestore ──
-  const {
-    products: realtimeProducts,
-    loading: productsLoading,
-  } = useRecentlyAdded(20, { onError: handleRealtimeError });
-
-  const {
-    deals: realtimeDeals,
-    loading: dealsLoading,
-  } = useBestDeals(6, { onError: handleRealtimeError });
-
-  // ── Use Firestore data directly — no mock fallback ──
-  const products = realtimeProducts;
-  const deals = realtimeDeals;
-
-  // ── Filtering & sorting (client-side on the streamed data) ──
+  // ── Filtering & sorting (client-side on the streamed data) ─
   const filteredProducts = useMemo(() => {
     let filtered = activeCategory === 'all'
       ? products
@@ -366,13 +368,7 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
             <button
               className="sort-btn"
               id="sort-button"
-              onClick={() => {
-                setSortOrder(prev => {
-                  if (prev === null) return 'low-high';
-                  if (prev === 'low-high') return 'high-low';
-                  return null;
-                });
-              }}
+              onClick={cycleSortOrder}
             >
               <span><ArrowUpDown size={14} strokeWidth={2} /></span>
               <span>

@@ -126,27 +126,36 @@ export async function findOrCreateChat(buyerId, sellerId, product) {
 }
 
 /**
- * Send a message in a chat thread.
+ * Send a message in a chat thread, with optional image attachment.
  *
- * @param {string} chatId   – Chat document ID
- * @param {string} senderId – UID of the sender
- * @param {string} text     – Message text
+ * @param {string}      chatId   – Chat document ID
+ * @param {string}      senderId – UID of the sender
+ * @param {string}      text     – Message text (may be empty when sending an image-only message)
+ * @param {string|null} imageUrl – Optional public download URL of an uploaded image
  * @returns {Promise<string>} messageId
  */
-export async function sendMessage(chatId, senderId, text) {
-  if (!text.trim()) return;
+export async function sendMessage(chatId, senderId, text, imageUrl = null) {
+  const trimmedText = (text || '').trim();
+  if (!trimmedText && !imageUrl) return;
 
   const messagesRef = collection(db, 'chats', chatId, 'messages');
-  const msgDoc = await addDoc(messagesRef, {
+  const messageData = {
     senderId,
-    text: text.trim(),
+    text: trimmedText,
     createdAt: serverTimestamp(),
-  });
+  };
+  if (imageUrl) messageData.imageUrl = imageUrl;
 
-  // Update the chat thread's last message preview
+  const msgDoc = await addDoc(messagesRef, messageData);
+
+  // Build the chat-level preview shown in ChatsScreen
+  const lastMessage = trimmedText
+    ? trimmedText.slice(0, 100)
+    : '📷 Photo';
+
   const chatRef = doc(db, 'chats', chatId);
   await updateDoc(chatRef, {
-    lastMessage: text.trim().slice(0, 100),
+    lastMessage,
     lastMessageSenderId: senderId,
     lastMessageAt: serverTimestamp(),
   });

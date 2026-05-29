@@ -554,19 +554,25 @@ export async function isProductSaved(userId, productId) {
 /**
  * Hook: live stream of recently added active products.
  *
+ * Supports stale-while-revalidate via the `initialData` option:
+ * when the caller supplies cached data the hook renders it immediately
+ * (loading=false) and silently replaces it once Firestore responds.
+ *
  * @param {number} [count=10] – Max items
- * @param {{ onError?: function }} [options]
+ * @param {{ onError?: function, initialData?: Array }} [options]
  * @returns {{ products: Array, loading: boolean, error: Error|null }}
  */
 export function useRecentlyAdded(count = 10, options = {}) {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const hasInitial = Array.isArray(options.initialData) && options.initialData.length > 0;
+  const [products, setProducts] = useState(hasInitial ? options.initialData : []);
+  const [loading, setLoading] = useState(!hasInitial);
   const [error, setError] = useState(null);
   const shownRef = useRef(false);
 
   useEffect(() => {
     shownRef.current = false;
-    setLoading(true);
+    // Only show loading spinner when we have no cached data to show
+    if (!hasInitial) setLoading(true);
     const unsubscribe = subscribeToRecentlyAdded(count, (data, err) => {
       setProducts(data);
       setError(err || null);
@@ -581,6 +587,7 @@ export function useRecentlyAdded(count = 10, options = {}) {
     });
 
     return () => safeUnsubscribe(unsubscribe);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count]);
 
   return { products, loading, error };
@@ -589,19 +596,25 @@ export function useRecentlyAdded(count = 10, options = {}) {
 /**
  * Hook: live stream of cheapest active products (best deals).
  *
+ * Supports stale-while-revalidate via the `initialData` option:
+ * when the caller supplies cached data the hook renders it immediately
+ * (loading=false) and silently replaces it once Firestore responds.
+ *
  * @param {number} [count=6] – Max items
- * @param {{ onError?: function }} [options]
+ * @param {{ onError?: function, initialData?: Array }} [options]
  * @returns {{ deals: Array, loading: boolean, error: Error|null }}
  */
 export function useBestDeals(count = 6, options = {}) {
-  const [deals, setDeals] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const hasInitial = Array.isArray(options.initialData) && options.initialData.length > 0;
+  const [deals, setDeals] = useState(hasInitial ? options.initialData : []);
+  const [loading, setLoading] = useState(!hasInitial);
   const [error, setError] = useState(null);
   const shownRef = useRef(false);
 
   useEffect(() => {
     shownRef.current = false;
-    setLoading(true);
+    // Only show loading spinner when we have no cached data to show
+    if (!hasInitial) setLoading(true);
     const unsubscribe = subscribeToBestDeals(count, (data, err) => {
       setDeals(data);
       setError(err || null);
@@ -615,6 +628,7 @@ export function useBestDeals(count = 6, options = {}) {
     });
 
     return () => safeUnsubscribe(unsubscribe);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count]);
 
   return { deals, loading, error };

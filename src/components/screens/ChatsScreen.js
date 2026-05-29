@@ -112,7 +112,11 @@ export default function ChatsScreen({ onChatClick }) {
                   {display.product && (
                     <span style={{ color: 'var(--text-tertiary)', fontSize: '11px' }}>{display.product} · </span>
                   )}
-                  {display.lastMessage}
+                  {display.lastMessage === '📷 Photo' ? (
+                    <span style={{ color: 'var(--primary)', fontStyle: 'italic' }}>📷 Photo</span>
+                  ) : (
+                    display.lastMessage
+                  )}
                 </div>
               </div>
               <div className="chat-list-meta">
