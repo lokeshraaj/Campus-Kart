@@ -173,7 +173,7 @@ export default function ChatScreen({ chat, onBack }) {
             {presenceText}
           </div>
         </div>
-        {chat.productId && (
+        {chat.productId && user?.uid === chat.sellerId && (
           <button
             className="chat-mark-sold"
             id="mark-sold-button"

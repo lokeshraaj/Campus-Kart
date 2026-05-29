@@ -47,6 +47,11 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const { isSaved, toggling, toggle: rawToggle } = useSaveToggle(user?.uid, product);
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
   const [sellerProfile, setSellerProfile] = useState(null);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [ratingModalOpen, setRatingModalOpen] = useState(false);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [selectedRating, setSelectedRating] = useState(0);
+  const [ratingDone, setRatingDone] = useState(false);
 
   const { showSuccess } = useSuccessPopup();
 
@@ -78,7 +83,9 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const galleryImages = (Array.isArray(product.images) && product.images.length > 0)
     ? product.images
     : [product.imageUrl || product.image].filter(Boolean);
-  const imageUrl = galleryImages[0] || '';
+  // Clamp active index in case images array changed
+  const safeIndex = Math.min(activeImageIndex, galleryImages.length - 1);
+  const imageUrl = galleryImages[safeIndex] || '';
 
   const handleToggleSave = async () => {
     await rawToggle();
@@ -98,31 +105,51 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const sellerRating = sellerProfile?.ratingAverage || product.seller?.rating || 4.5;
   const sellerReviews = sellerProfile?.ratingCount || product.seller?.reviews || 0;
   const postedDate = product.postedAt || (product.createdAt?.toDate ? product.createdAt.toDate().toLocaleDateString() : 'recently');
-  const canRateSeller = product.status === 'sold' && !!user?.uid && user.uid !== product.userId;
+  // Any logged-in buyer (non-seller) can rate the seller
+  const canRateSeller = !!user?.uid && user.uid !== product.userId && !ratingDone;
 
   const handleRateSeller = async () => {
-    const input = window.prompt('Rate this seller from 1 to 5');
-    if (input === null) return;
-
-    const numericRating = Number(input.trim());
-    if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
-      toast.error('Please enter a whole number between 1 and 5.');
+    if (!selectedRating) {
+      toast.error('Please select a star rating first.');
       return;
     }
-
     try {
       setRatingSubmitting(true);
       await rateSeller({
         productId: product.id,
         sellerId: product.userId,
-        rating: numericRating,
+        rating: selectedRating,
       });
+      setRatingDone(true);
+      setRatingModalOpen(false);
       showSuccess('Rating Submitted!', 'Thanks for rating the seller.');
     } catch (err) {
       console.error('Failed to submit seller rating:', err);
       toast.error(err?.message || 'Could not submit rating');
     } finally {
       setRatingSubmitting(false);
+    }
+  };
+
+  const handleShare = async () => {
+    const shareText = `${product.title} — ₹${product.price?.toLocaleString() ?? ''} on CampusKart`;
+    const shareUrl = typeof window !== 'undefined' ? window.location.href : 'https://campuskart.app';
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: product.title, text: shareText, url: shareUrl });
+      } catch (err) {
+        // User cancelled — not an error
+        if (err.name !== 'AbortError') console.error('Share failed:', err);
+      }
+    } else {
+      // Fallback: copy to clipboard
+      try {
+        await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
+        toast.success('Link copied to clipboard!');
+      } catch {
+        toast.error('Could not copy link.');
+      }
     }
   };
 
@@ -607,7 +634,7 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
             <ArrowLeft size={18} strokeWidth={2} />
           </button>
           <span className="pdp-topbar-title">{product.title}</span>
-          <button className="pdp-topbar-btn" aria-label="Share product" id="detail-share-button">
+          <button className="pdp-topbar-btn" onClick={handleShare} aria-label="Share product" id="detail-share-button">
             <Share2 size={18} strokeWidth={2} />
           </button>
         </div>
@@ -633,7 +660,11 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
               {/* Thumbnail Gallery */}
               <div className="pdp-thumbnails">
                 {galleryImages.slice(0, 4).map((img, idx) => (
-                  <div key={img + idx} className={`pdp-thumb ${idx === 0 ? 'active' : ''}`}>
+                  <div
+                    key={img + idx}
+                    className={`pdp-thumb ${idx === safeIndex ? 'active' : ''}`}
+                    onClick={() => setActiveImageIndex(idx)}
+                  >
                     <img src={img} alt={`Thumbnail ${idx + 1}`} />
                   </div>
                 ))}
@@ -730,12 +761,12 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
                 <div style={{ marginTop: '0.75rem' }}>
                   <button
                     className="pdp-btn-save"
-                    onClick={handleRateSeller}
-                    disabled={ratingSubmitting}
-                    style={{ width: '100%', opacity: ratingSubmitting ? 0.6 : 1 }}
+                    onClick={() => setRatingModalOpen(true)}
+                    style={{ width: '100%' }}
+                    id="rate-seller-button"
                   >
                     <Star size={16} strokeWidth={2} />
-                    {ratingSubmitting ? 'Submitting...' : 'Rate Seller'}
+                    Rate Seller
                   </button>
                 </div>
               )}
@@ -789,6 +820,90 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
           </button>
         </div>
       </div>
+      {/* ── Star Rating Modal (Fix 6) ───────────────────── */}
+      {ratingModalOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(6px)',
+            animation: 'smFadeIn 0.2s ease forwards',
+          }}
+          onClick={() => setRatingModalOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#FFFFFF', borderRadius: '20px',
+              padding: '32px 28px 28px', maxWidth: '340px', width: '92%',
+              textAlign: 'center', boxShadow: '0 24px 48px -12px rgba(0,0,0,0.25)',
+              animation: 'smZoomIn 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards',
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: '8px' }}>⭐</div>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0F172A', margin: '0 0 6px' }}>
+              Rate {sellerName}
+            </h2>
+            <p style={{ fontSize: '13px', color: '#64748B', marginBottom: '24px', lineHeight: 1.5 }}>
+              How was your experience with this seller?
+            </p>
+
+            {/* Star picker */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginBottom: '24px' }}>
+              {[1, 2, 3, 4, 5].map(star => (
+                <button
+                  key={star}
+                  onClick={() => setSelectedRating(star)}
+                  onMouseEnter={() => setHoverRating(star)}
+                  onMouseLeave={() => setHoverRating(0)}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    fontSize: '2rem', padding: '4px',
+                    transition: 'transform 0.15s ease',
+                    transform: (hoverRating || selectedRating) >= star ? 'scale(1.2)' : 'scale(1)',
+                    filter: (hoverRating || selectedRating) >= star ? 'none' : 'grayscale(1) opacity(0.35)',
+                  }}
+                  aria-label={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                >
+                  ⭐
+                </button>
+              ))}
+            </div>
+
+            {selectedRating > 0 && (
+              <p style={{ fontSize: '13px', color: '#2563EB', fontWeight: 600, marginBottom: '16px' }}>
+                {['', 'Poor', 'Fair', 'Good', 'Great', 'Excellent!'][selectedRating]}
+              </p>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => { setRatingModalOpen(false); setSelectedRating(0); setHoverRating(0); }}
+                style={{
+                  flex: 1, height: '44px', border: '1.5px solid #E2E8F0',
+                  borderRadius: '10px', background: '#FFFFFF', fontSize: '14px',
+                  fontWeight: 500, color: '#64748B', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRateSeller}
+                disabled={ratingSubmitting || !selectedRating}
+                style={{
+                  flex: 1, height: '44px', border: 'none',
+                  borderRadius: '10px', background: selectedRating ? '#2563EB' : '#E2E8F0',
+                  fontSize: '14px', fontWeight: 700, color: selectedRating ? '#FFFFFF' : '#94A3B8',
+                  cursor: selectedRating ? 'pointer' : 'not-allowed',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {ratingSubmitting ? 'Submitting…' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

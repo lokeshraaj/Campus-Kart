@@ -1,60 +1,118 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search, X, Heart, Clock, Flame, Filter, Loader2 } from 'lucide-react';
-import { useRecentlyAdded } from '@/hooks/useRealtimeData';
-import { useSaveToggle } from '@/hooks/useRealtimeData';
+import { useRecentlyAdded, useSaveToggle } from '@/hooks/useRealtimeData';
 import { useAuth } from '@/context/AuthContext';
 import { useSuccessPopup } from '@/components/SuccessPopup';
 import toast from 'react-hot-toast';
 
-export default function SearchScreen({ onProductClick }) {
+const RECENT_SEARCHES_KEY = 'campuskart_recent_searches';
+const MAX_RECENT = 5;
+
+/** Firestore-backed save button — matches HomeScreen's WishlistButton */
+function SaveButton({ product }) {
   const { user } = useAuth();
   const { showSuccess } = useSuccessPopup();
+  const { isSaved, toggling, toggle } = useSaveToggle(user?.uid, product);
+  const [localSaved, setLocalSaved] = useState(false);
+
+  const saved = user ? isSaved : localSaved;
+
+  const handleClick = async (e) => {
+    e.stopPropagation();
+    if (user) {
+      const wasAlreadySaved = isSaved;
+      await toggle();
+      if (!wasAlreadySaved) {
+        showSuccess('Item Saved!', 'This item has been added to your saved collection.');
+      } else {
+        toast('Removed from Saved');
+      }
+    } else {
+      setLocalSaved(v => !v);
+    }
+  };
+
+  return (
+    <button
+      className={`product-card-wishlist ${saved ? 'liked' : ''}`}
+      onClick={handleClick}
+      aria-label="Toggle wishlist"
+      disabled={toggling}
+      style={{ opacity: toggling ? 0.5 : 1 }}
+    >
+      <Heart
+        size={18}
+        strokeWidth={2}
+        fill={saved ? 'currentColor' : 'none'}
+        color={saved ? '#ea580c' : 'currentColor'}
+      />
+    </button>
+  );
+}
+
+export default function SearchScreen({ onProductClick }) {
   const [query, setQuery] = useState('');
   const [conditionFilter, setConditionFilter] = useState('all');
-  const [wishlist, setWishlist] = useState({});
+
+  // ── Persisted Recent Searches ────────────────────────────
+  const [recentSearches, setRecentSearches] = useState(() => {
+    try {
+      const stored = localStorage.getItem(RECENT_SEARCHES_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveSearch = useCallback((term) => {
+    if (!term.trim()) return;
+    setRecentSearches(prev => {
+      const next = [term, ...prev.filter(s => s !== term)].slice(0, MAX_RECENT);
+      try { localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const clearRecentSearches = () => {
+    setRecentSearches([]);
+    try { localStorage.removeItem(RECENT_SEARCHES_KEY); } catch {}
+  };
+
+  const handleQueryChange = (val) => {
+    setQuery(val);
+  };
+
+  // Save search when user pauses typing (500 ms debounce)
+  useEffect(() => {
+    if (!query.trim()) return;
+    const id = setTimeout(() => saveSearch(query.trim()), 500);
+    return () => clearTimeout(id);
+  }, [query, saveSearch]);
 
   // Fetch real products from Firestore (up to 50 active listings)
   const { products: allProducts, loading } = useRecentlyAdded(50);
 
-  const recentSearches = [
-    'Engineering Mathematics', 
-    'MacBook Air', 
-    'Lab Coat', 
-    'Physics Notes',
-    'Calculator',
-  ];
-
   const trendingTags = [
-    'Textbooks', 'Laptops', 'Handwritten Notes', 
+    'Textbooks', 'Laptops', 'Handwritten Notes',
     'Lab Equipment', 'Headphones', 'Drafting Tools',
     'Backpacks', 'Phones', 'Study Furniture',
   ];
 
   // Filter products by search query AND condition dropdown
   const searchResults = allProducts.filter(p => {
-    // Text match (title + description)
     const textMatch = query
       ? (p.title?.toLowerCase().includes(query.toLowerCase()) ||
          p.description?.toLowerCase().includes(query.toLowerCase()) ||
          p.category?.toLowerCase().includes(query.toLowerCase()))
       : false;
 
-    // Condition match
-    const conditionMatch = conditionFilter === 'all' 
-      ? true 
+    const conditionMatch = conditionFilter === 'all'
+      ? true
       : (p.condition || 'Used').toLowerCase() === conditionFilter.toLowerCase();
 
     return textMatch && conditionMatch;
   });
-
-  const toggleWishlist = (e, productId) => {
-    e.stopPropagation();
-    setWishlist(prev => ({ ...prev, [productId]: !prev[productId] }));
-    if (!wishlist[productId]) {
-      showSuccess('Item Saved!', 'This item has been added to your saved collection.');
-    }
-  };
 
   return (
     <div className="search-page animate-fade-in">
@@ -68,7 +126,7 @@ export default function SearchScreen({ onProductClick }) {
             type="text"
             placeholder="Search books, notes, gadgets…"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => handleQueryChange(e.target.value)}
             id="search-input"
             autoFocus
           />
@@ -84,9 +142,9 @@ export default function SearchScreen({ onProductClick }) {
         </div>
 
         {/* Condition Dropdown */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
           gap: '8px',
           marginTop: '10px'
         }}>
@@ -138,19 +196,9 @@ export default function SearchScreen({ onProductClick }) {
                   id={`search-result-${product.id}`}
                 >
                   <div className="product-card-image">
-                    <img src={product.imageUrl || product.image} alt={product.title} loading="lazy" />
-                    <button
-                      className={`product-card-wishlist ${wishlist[product.id] ? 'liked' : ''}`}
-                      onClick={(e) => toggleWishlist(e, product.id)}
-                      aria-label="Toggle wishlist"
-                    >
-                      <Heart 
-                        size={18} 
-                        strokeWidth={2} 
-                        fill={wishlist[product.id] ? 'currentColor' : 'none'} 
-                        color={wishlist[product.id] ? '#ea580c' : 'currentColor'} 
-                      />
-                    </button>
+                    <img src={product.images?.[0] || product.imageUrl || product.image} alt={product.title} loading="lazy" />
+                    {/* Firestore-backed save button (Fix 2) */}
+                    <SaveButton product={product} />
                     {/* Condition badge */}
                     {product.condition && (
                       <span style={{
@@ -204,17 +252,31 @@ export default function SearchScreen({ onProductClick }) {
         <div>
           {/* Recent Searches */}
           <div className="search-recent">
-            <h3 className="search-recent-title">Recent Searches</h3>
-            {recentSearches.map((item, i) => (
-              <div
-                key={i}
-                className="search-recent-item"
-                onClick={() => setQuery(item)}
-              >
-                <span style={{ color: '#9ca3af', display: 'flex', alignItems: 'center' }}><Clock size={16} strokeWidth={2} /></span>
-                <span>{item}</span>
-              </div>
-            ))}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+              <h3 className="search-recent-title" style={{ margin: 0 }}>Recent Searches</h3>
+              {recentSearches.length > 0 && (
+                <button
+                  onClick={clearRecentSearches}
+                  style={{ fontSize: '12px', color: '#94A3B8', background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+            {recentSearches.length === 0 ? (
+              <p style={{ fontSize: '13px', color: '#94A3B8' }}>No recent searches yet.</p>
+            ) : (
+              recentSearches.map((item, i) => (
+                <div
+                  key={i}
+                  className="search-recent-item"
+                  onClick={() => setQuery(item)}
+                >
+                  <span style={{ color: '#9ca3af', display: 'flex', alignItems: 'center' }}><Clock size={16} strokeWidth={2} /></span>
+                  <span>{item}</span>
+                </div>
+              ))
+            )}
           </div>
 
           {/* Trending */}
