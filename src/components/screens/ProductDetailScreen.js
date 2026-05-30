@@ -1,11 +1,11 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
-import { ArrowLeft, Share2, Sparkles, Recycle, ShieldCheck, Star, MapPin, Heart, MessageCircle, BadgeDollarSign, ImageIcon } from 'lucide-react';
+import { ArrowLeft, Share2, Sparkles, Recycle, ShieldCheck, Star, MapPin, Heart, MessageCircle, BadgeDollarSign, ImageIcon, Flag, X } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useSaveToggle } from '@/hooks/useRealtimeData';
 import { useSuccessPopup } from '@/components/SuccessPopup';
-import { rateSeller } from '@/lib/productService';
+import { rateSeller, reportListing } from '@/lib/productService';
 import { getProfileCollegeLine, getProfileDisplayName, getProfileInitials, getUserProfile } from '@/lib/userService';
 import toast from 'react-hot-toast';
 
@@ -52,8 +52,17 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const [hoverRating, setHoverRating] = useState(0);
   const [selectedRating, setSelectedRating] = useState(0);
   const [ratingDone, setRatingDone] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportReason, setReportReason] = useState('misleading');
+  const [reportDetails, setReportDetails] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
 
   const { showSuccess } = useSuccessPopup();
+
+  useEffect(() => {
+    setActiveImageIndex(0);
+  }, [product?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,8 +114,7 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
   const sellerRating = sellerProfile?.ratingAverage || product.seller?.rating || 4.5;
   const sellerReviews = sellerProfile?.ratingCount || product.seller?.reviews || 0;
   const postedDate = product.postedAt || (product.createdAt?.toDate ? product.createdAt.toDate().toLocaleDateString() : 'recently');
-  // Any logged-in buyer (non-seller) can rate the seller
-  const canRateSeller = !!user?.uid && user.uid !== product.userId && !ratingDone;
+  const canRateSeller = !!user?.uid && user.uid !== product.userId && product.status === 'sold' && !ratingDone;
 
   const handleRateSeller = async () => {
     if (!selectedRating) {
@@ -135,7 +143,7 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
     const shareText = `${product.title} — ₹${product.price?.toLocaleString() ?? ''} on CampusKart`;
     const shareUrl = typeof window !== 'undefined' ? window.location.href : 'https://campuskart.app';
 
-    if (navigator.share) {
+    if (typeof navigator !== 'undefined' && navigator.share) {
       try {
         await navigator.share({ title: product.title, text: shareText, url: shareUrl });
       } catch (err) {
@@ -145,11 +153,32 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
     } else {
       // Fallback: copy to clipboard
       try {
+        if (typeof navigator === 'undefined') throw new Error('Navigator unavailable');
+        if (!navigator.clipboard) throw new Error('Clipboard unavailable');
         await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
         toast.success('Link copied to clipboard!');
       } catch {
         toast.error('Could not copy link.');
       }
+    }
+  };
+
+  const handleReportListing = async () => {
+    try {
+      setReportSubmitting(true);
+      await reportListing({
+        productId: product.id,
+        reason: reportReason,
+        details: reportDetails,
+      });
+      setReportModalOpen(false);
+      setReportDetails('');
+      showSuccess('Report Submitted', 'Thanks for helping keep CampusKart safe.');
+    } catch (err) {
+      console.error('Report listing failed:', err);
+      toast.error(err?.message || 'Could not submit report');
+    } finally {
+      setReportSubmitting(false);
     }
   };
 
@@ -647,6 +676,12 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
             <div className="pdp-left">
               {/* Main Image */}
               <div className="pdp-main-image">
+                <button
+                  type="button"
+                  onClick={() => imageUrl && setLightboxOpen(true)}
+                  aria-label="Open image gallery"
+                  style={{ position: 'absolute', inset: 0, zIndex: 2, border: 'none', background: 'transparent', cursor: 'zoom-in' }}
+                />
                 <SafeImage
                   src={imageUrl}
                   alt={product.title}
@@ -792,6 +827,16 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
                 </div>
               )}
 
+              <button
+                type="button"
+                className="pdp-btn-save"
+                onClick={() => setReportModalOpen(true)}
+                style={{ width: '100%', marginTop: '1rem', color: '#B91C1C' }}
+              >
+                <Flag size={16} strokeWidth={2} />
+                Report Listing
+              </button>
+
               {/* Saves Count */}
               {product.savesCount > 0 && (
                 <div className="pdp-saves">
@@ -820,6 +865,90 @@ export default function ProductDetailScreen({ product, onBack, onChat }) {
           </button>
         </div>
       </div>
+      {lightboxOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(15,23,42,0.92)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={() => setLightboxOpen(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(false)}
+            aria-label="Close gallery"
+            style={{
+              position: 'absolute', top: 16, right: 16,
+              width: 40, height: 40, borderRadius: 999,
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(255,255,255,0.12)', color: '#FFFFFF',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+          >
+            <X size={20} strokeWidth={2} />
+          </button>
+          <div onClick={(event) => event.stopPropagation()} style={{ position: 'relative', width: 'min(92vw, 920px)', height: 'min(78vh, 720px)' }}>
+            <SafeImage src={imageUrl} alt={product.title} fill sizes="92vw" style={{ objectFit: 'contain' }} />
+          </div>
+        </div>
+      )}
+      {reportModalOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(6px)',
+          }}
+          onClick={() => setReportModalOpen(false)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              background: '#FFFFFF', borderRadius: '16px',
+              padding: '24px', maxWidth: '380px', width: '92%',
+              boxShadow: '0 24px 48px -12px rgba(0,0,0,0.25)',
+            }}
+          >
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0F172A', margin: '0 0 14px' }}>
+              Report Listing
+            </h2>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+              Reason
+            </label>
+            <select
+              value={reportReason}
+              onChange={(event) => setReportReason(event.target.value)}
+              style={{ width: '100%', height: 42, border: '1px solid #CBD5E1', borderRadius: 8, padding: '0 10px', marginBottom: 14 }}
+            >
+              <option value="misleading">Misleading details</option>
+              <option value="prohibited">Prohibited or unsafe item</option>
+              <option value="spam">Spam or duplicate</option>
+              <option value="other">Other</option>
+            </select>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#334155', marginBottom: '6px' }}>
+              Details
+            </label>
+            <textarea
+              value={reportDetails}
+              onChange={(event) => setReportDetails(event.target.value)}
+              rows={3}
+              placeholder="Add context for review"
+              style={{ width: '100%', border: '1px solid #CBD5E1', borderRadius: 8, padding: 10, resize: 'vertical', marginBottom: 16 }}
+            />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button type="button" onClick={() => setReportModalOpen(false)} style={{ flex: 1, height: 42, border: '1px solid #E2E8F0', borderRadius: 10, background: '#FFFFFF', cursor: 'pointer' }}>
+                Cancel
+              </button>
+              <button type="button" onClick={handleReportListing} disabled={reportSubmitting} style={{ flex: 1, height: 42, border: 'none', borderRadius: 10, background: '#B91C1C', color: '#FFFFFF', fontWeight: 700, cursor: reportSubmitting ? 'not-allowed' : 'pointer', opacity: reportSubmitting ? 0.7 : 1 }}>
+                {reportSubmitting ? 'Submitting...' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ── Star Rating Modal (Fix 6) ───────────────────── */}
       {ratingModalOpen && (
         <div

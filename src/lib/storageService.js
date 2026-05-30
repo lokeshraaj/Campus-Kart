@@ -175,6 +175,26 @@ export async function uploadChatImage(file, chatId) {
 }
 
 /**
+ * Upload a user's profile photo to Firebase Storage.
+ *
+ * @param {File} file - The image file from an <input type="file">
+ * @param {string} userId - Firebase Auth UID
+ * @returns {Promise<string>} Public download URL
+ */
+export async function uploadProfileImage(file, userId) {
+  if (!userId) throw new Error('userId is required to upload a profile image.');
+  try {
+    return await uploadCompressedImage(file, `users/${userId}/profile`, {
+      maxSizeMB: 0.25,
+      maxWidthOrHeight: 512,
+    });
+  } catch (error) {
+    console.error('[Storage] uploadProfileImage failed:', error.code, error.message);
+    throw annotateStorageError(error);
+  }
+}
+
+/**
  * Delete an image from Firebase Storage by its download URL.
  *
  * @param {string} imageUrl – The full download URL returned by an upload function

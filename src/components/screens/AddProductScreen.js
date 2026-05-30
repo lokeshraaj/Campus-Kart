@@ -7,6 +7,7 @@ import { uploadProductImage } from '@/lib/storageService';
 import toast from 'react-hot-toast';
 
 const MAX_IMAGES = 5;
+const MAX_PRICE = 500000;
 const PUBLISH_TIMEOUT_MS = 8000;
 const IMAGE_UPLOAD_TIMEOUT_MS = 12000;
 
@@ -29,15 +30,6 @@ function withUploadTimeout(promise) {
   });
 
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
-}
-
-function fileToPreviewUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('Could not preview this image.'));
-    reader.readAsDataURL(file);
-  });
 }
 
 export default function AddProductScreen({ onNavigate }) {
@@ -116,13 +108,13 @@ export default function AddProductScreen({ onNavigate }) {
 
       uploadResults.forEach((result) => {
         if (result.status === 'rejected') {
-          console.warn('Image upload unavailable, using local preview:', result.reason?.message || result.reason);
+          console.warn('Image upload unavailable:', result.reason?.message || result.reason);
         }
       });
 
-      const previewUrls = await Promise.all(filesToUpload.map(fileToPreviewUrl));
-      setImages((prev) => [...prev, ...previewUrls].slice(0, MAX_IMAGES));
-      toast.success('Image added as a local preview. Deploy storage rules to make uploads permanent.');
+      const message = 'Image upload failed. Please deploy Storage rules or configure Cloudinary before posting.';
+      setError(message);
+      toast.error(message);
     } catch (err) {
       console.error('Image upload failed:', err);
       const message = err.userMessage || err.message || 'Could not add this image. Please try another file.';
@@ -173,7 +165,9 @@ export default function AddProductScreen({ onNavigate }) {
     setError('');
 
     if (!title.trim()) return setError('Please enter a title.');
-    if (!price || Number(price) <= 0) return setError('Please enter a valid price.');
+    const numericPrice = Number(price);
+    if (!price || numericPrice <= 0) return setError('Please enter a valid price.');
+    if (numericPrice > MAX_PRICE) return setError(`Please enter a price under ₹${MAX_PRICE.toLocaleString('en-IN')}.`);
     if (!category) return setError('Please select a category.');
 
     const currentUser = getCurrentUser();
@@ -191,7 +185,7 @@ export default function AddProductScreen({ onNavigate }) {
 
     const publishPromise = addProduct({
       title: title.trim(),
-      price: Number(price),
+      price: numericPrice,
       description: description.trim(),
       category,
       condition,
@@ -366,7 +360,7 @@ export default function AddProductScreen({ onNavigate }) {
           <div className="sell-row">
             <div className="sell-field">
               <label className="sell-label" htmlFor="product-price">Price (₹) *</label>
-              <input type="number" className="sell-input" id="product-price" placeholder="Enter price in INR" value={price} onChange={(e) => setPrice(e.target.value)} disabled={loading} />
+              <input type="number" className="sell-input" id="product-price" placeholder="Enter price in INR" value={price} onChange={(e) => setPrice(e.target.value)} min="1" max={MAX_PRICE} disabled={loading} />
             </div>
             <div className="sell-field">
               <label className="sell-label" htmlFor="product-category">Category *</label>

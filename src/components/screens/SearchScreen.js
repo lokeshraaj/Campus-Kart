@@ -56,27 +56,29 @@ export default function SearchScreen({ onProductClick }) {
   const [conditionFilter, setConditionFilter] = useState('all');
 
   // ── Persisted Recent Searches ────────────────────────────
-  const [recentSearches, setRecentSearches] = useState(() => {
+  const [recentSearches, setRecentSearches] = useState([]);
+
+  useEffect(() => {
     try {
-      const stored = localStorage.getItem(RECENT_SEARCHES_KEY);
-      return stored ? JSON.parse(stored) : [];
+      const stored = window.localStorage.getItem(RECENT_SEARCHES_KEY);
+      setRecentSearches(stored ? JSON.parse(stored) : []);
     } catch {
-      return [];
+      setRecentSearches([]);
     }
-  });
+  }, []);
 
   const saveSearch = useCallback((term) => {
     if (!term.trim()) return;
     setRecentSearches(prev => {
       const next = [term, ...prev.filter(s => s !== term)].slice(0, MAX_RECENT);
-      try { localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next)); } catch {}
+      try { window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next)); } catch {}
       return next;
     });
   }, []);
 
   const clearRecentSearches = () => {
     setRecentSearches([]);
-    try { localStorage.removeItem(RECENT_SEARCHES_KEY); } catch {}
+    try { window.localStorage.removeItem(RECENT_SEARCHES_KEY); } catch {}
   };
 
   const handleQueryChange = (val) => {

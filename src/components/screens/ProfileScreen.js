@@ -1,22 +1,30 @@
 'use client';
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { MapPin, Mail, BookOpen, Package, Heart, Settings, LogOut, Loader2 } from 'lucide-react';
+import { Camera, MapPin, Mail, BookOpen, Package, Heart, Settings, LogOut, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { logout } from '@/lib/authService';
+import { logout, updateCurrentUserProfile } from '@/lib/authService';
 import { useMyListings, useSavedItems } from '@/hooks/useRealtimeData';
-import { cleanupSoldProductsByUser, markAsSold } from '@/lib/productService';
+import { deleteProduct, markAsSold, updateProduct } from '@/lib/productService';
 import { getProfileDisplayName, getUserProfile, saveUserProfile } from '@/lib/userService';
+import { uploadProfileImage } from '@/lib/storageService';
 import { useSuccessPopup } from '@/components/SuccessPopup';
 import toast from 'react-hot-toast';
+
+const EMPTY_PROFILE = {
+  university: '',
+  branch: '',
+  bio: '',
+  photoURL: '',
+};
 
 export default function ProfileScreen() {
   const { user } = useAuth();
   const { showToast } = useToast();
   const { showSuccess } = useSuccessPopup();
   const [activeTab, setActiveTab] = useState('listings');
-  const soldCleanupUserRef = useRef(null);
+  const photoInputRef = useRef(null);
 
   const handleRealtimeError = useCallback((msg) => {
     showToast(msg, 'info', 5000);
@@ -26,25 +34,18 @@ export default function ProfileScreen() {
   const { listings, loading: listingsLoading } = useMyListings(user?.uid, { onError: handleRealtimeError });
   const { savedItems, loading: savedLoading } = useSavedItems(user?.uid, { onError: handleRealtimeError });
 
-  useEffect(() => {
-    if (!user?.uid || soldCleanupUserRef.current === user.uid) return;
-
-    soldCleanupUserRef.current = user.uid;
-    cleanupSoldProductsByUser(user.uid).catch((err) => {
-      console.warn('Sold product cleanup skipped:', err?.message || err);
-    });
-  }, [user?.uid]);
-
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'User';
   const userEmail = user?.email || '';
   const [profileSaving, setProfileSaving] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [listingSaving, setListingSaving] = useState(false);
 
   // Live Display State (Updated only on Save)
   const [profileData, setProfileData] = useState({
     name: displayName,
-    university: 'Ramgarh Engineering College',
-    branch: 'Computer Science and Engineering',
-    bio: 'Full-stack developer building cool things for the web.'
+    ...EMPTY_PROFILE,
+    photoURL: user?.photoURL || '',
   });
 
   // Form State for Edit Profile
@@ -53,7 +54,8 @@ export default function ProfileScreen() {
     email: userEmail,
     university: profileData.university,
     branch: profileData.branch,
-    bio: profileData.bio
+    bio: profileData.bio,
+    photoURL: profileData.photoURL,
   });
 
   const avatarText = getProfileDisplayName(profileData, displayName)
@@ -75,9 +77,10 @@ export default function ProfileScreen() {
 
         const nextProfile = {
           name: getProfileDisplayName(profile, displayName),
-          university: profile.university || 'Ramgarh Engineering College',
-          branch: profile.branch || 'Computer Science and Engineering',
-          bio: profile.bio || 'Full-stack developer building cool things for the web.',
+          university: profile.university || '',
+          branch: profile.branch || '',
+          bio: profile.bio || '',
+          photoURL: profile.photoURL || user.photoURL || '',
         };
 
         setProfileData(nextProfile);
@@ -109,15 +112,19 @@ export default function ProfileScreen() {
       university: formData.university,
       branch: formData.branch,
       bio: formData.bio,
+      photoURL: formData.photoURL || '',
     };
 
     try {
       setProfileSaving(true);
+      await updateCurrentUserProfile({
+        displayName: formData.name,
+        photoURL: nextProfile.photoURL || null,
+      });
       await saveUserProfile(user.uid, {
         ...nextProfile,
         displayName: formData.name,
         email: userEmail,
-        photoURL: user.photoURL || '',
         emailVerified: user.emailVerified || false,
         verified: user.emailVerified || true,
       });
@@ -128,6 +135,42 @@ export default function ProfileScreen() {
       toast.error('Profile update failed');
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const handlePhotoSelect = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !user?.uid || photoUploading) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Profile photo must be under 5 MB.');
+      return;
+    }
+
+    try {
+      setPhotoUploading(true);
+      const photoURL = await uploadProfileImage(file, user.uid);
+      await updateCurrentUserProfile({ photoURL });
+      await saveUserProfile(user.uid, {
+        photoURL,
+        displayName: profileData.name,
+        email: userEmail,
+        emailVerified: user.emailVerified || false,
+        verified: user.emailVerified || true,
+      });
+      setProfileData((prev) => ({ ...prev, photoURL }));
+      setFormData((prev) => ({ ...prev, photoURL }));
+      toast.success('Profile photo updated!');
+    } catch (err) {
+      console.error('Profile photo upload failed:', err);
+      toast.error(err.userMessage || 'Could not upload profile photo.');
+    } finally {
+      setPhotoUploading(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
     }
   };
 
@@ -148,6 +191,67 @@ export default function ProfileScreen() {
     } catch (err) {
       console.error('Failed to mark as sold:', err);
       toast.error('Failed to mark item as sold');
+    }
+  };
+
+  const openEditListing = (product) => {
+    setEditingProduct({
+      id: product.id,
+      title: product.title || '',
+      price: product.price || '',
+      description: product.description || '',
+      location: product.location || '',
+    });
+  };
+
+  const handleListingInputChange = (event) => {
+    setEditingProduct((current) => ({
+      ...current,
+      [event.target.name]: event.target.value,
+    }));
+  };
+
+  const handleUpdateListing = async (event) => {
+    event.preventDefault();
+    if (!editingProduct?.id || listingSaving) return;
+
+    const numericPrice = Number(editingProduct.price);
+    if (!editingProduct.title.trim()) {
+      toast.error('Listing title is required.');
+      return;
+    }
+    if (!numericPrice || numericPrice <= 0) {
+      toast.error('Enter a valid price.');
+      return;
+    }
+
+    try {
+      setListingSaving(true);
+      await updateProduct(editingProduct.id, {
+        title: editingProduct.title.trim(),
+        price: numericPrice,
+        description: editingProduct.description.trim(),
+        location: editingProduct.location.trim(),
+      });
+      setEditingProduct(null);
+      toast.success('Listing updated.');
+    } catch (err) {
+      console.error('Listing update failed:', err);
+      toast.error('Could not update listing.');
+    } finally {
+      setListingSaving(false);
+    }
+  };
+
+  const handleDeleteListing = async (productId) => {
+    if (!window.confirm('Delete this listing permanently?')) return;
+
+    try {
+      await deleteProduct(productId);
+      toast.success('Listing deleted.');
+    } catch (err) {
+      console.error('Listing delete failed:', err);
+      toast.error('Could not delete listing.');
     }
   };
 
@@ -177,8 +281,8 @@ export default function ProfileScreen() {
         {items.map(product => (
           <div key={product.id} className="product-row">
             <div className="product-img-wrapper">
-              {(product.imageUrl || product.image) ? (
-                <img src={product.imageUrl || product.image} alt={product.title} />
+              {(product.images?.[0] || product.imageUrl || product.image) ? (
+                <img src={product.images?.[0] || product.imageUrl || product.image} alt={product.title} />
               ) : (
                 <div className="product-img-placeholder" />
               )}
@@ -189,12 +293,17 @@ export default function ProfileScreen() {
             </div>
             {showSoldBadge && <span className="sold-badge-tag">SOLD</span>}
             {showMarkSoldButton && (
-              <button 
-                onClick={() => handleMarkSold(product.id)}
-                className="mark-sold-btn"
-              >
-                Mark Sold
-              </button>
+              <div className="listing-actions">
+                <button type="button" onClick={() => openEditListing(product)} className="mark-sold-btn">
+                  Edit
+                </button>
+                <button type="button" onClick={() => handleMarkSold(product.id)} className="mark-sold-btn">
+                  Mark Sold
+                </button>
+                <button type="button" onClick={() => handleDeleteListing(product.id)} className="delete-listing-btn">
+                  Delete
+                </button>
+              </div>
             )}
           </div>
         ))}
@@ -210,12 +319,32 @@ export default function ProfileScreen() {
         <div className="profile-sidebar">
           <div className="profile-card text-center">
             <div className="avatar-container">
-              <div className="avatar">{avatarText}</div>
+              <div className="avatar">
+                {profileData.photoURL ? (
+                  <img src={profileData.photoURL} alt={profileData.name || displayName} />
+                ) : avatarText}
+              </div>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                className="avatar-input"
+                onChange={handlePhotoSelect}
+              />
+              <button
+                type="button"
+                className="avatar-upload-btn"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={photoUploading}
+                aria-label="Upload profile photo"
+              >
+                {photoUploading ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : <Camera size={14} strokeWidth={2.5} />}
+              </button>
               <span className="verified-badge">✓ Verified</span>
             </div>
             
             <h1 className="user-name">{profileData.name}</h1>
-            <p className="user-bio">{profileData.bio}</p>
+            <p className="user-bio">{profileData.bio || 'Add a short bio so buyers know who they are talking to.'}</p>
 
             <div className="info-list">
               <div className="info-item">
@@ -224,11 +353,11 @@ export default function ProfileScreen() {
               </div>
               <div className="info-item">
                 <BookOpen size={16} strokeWidth={2} className="icon" />
-                <span>{profileData.university}</span>
+                <span>{profileData.university || 'Add your university'}</span>
               </div>
               <div className="info-item">
                 <MapPin size={16} strokeWidth={2} className="icon" />
-                <span>{profileData.branch}</span>
+                <span>{profileData.branch || 'Add your branch or major'}</span>
               </div>
             </div>
 
@@ -315,17 +444,17 @@ export default function ProfileScreen() {
                   <div className="form-row">
                     <div className="form-group">
                       <label>University</label>
-                      <input type="text" name="university" value={formData.university} onChange={handleInputChange} />
+                      <input type="text" name="university" value={formData.university} onChange={handleInputChange} placeholder="Your college or university" />
                     </div>
                     <div className="form-group">
                       <label>Branch / Major</label>
-                      <input type="text" name="branch" value={formData.branch} onChange={handleInputChange} />
+                      <input type="text" name="branch" value={formData.branch} onChange={handleInputChange} placeholder="Your branch or major" />
                     </div>
                   </div>
 
                   <div className="form-group">
                     <label>Short Bio</label>
-                    <textarea name="bio" value={formData.bio} onChange={handleInputChange} rows="3"></textarea>
+                    <textarea name="bio" value={formData.bio} onChange={handleInputChange} rows="3" placeholder="A short note for buyers and sellers"></textarea>
                   </div>
 
                   <div className="form-actions">
@@ -339,6 +468,43 @@ export default function ProfileScreen() {
           </div>
         </div>
       </div>
+
+      {editingProduct && (
+        <div
+          className="listing-modal-backdrop"
+          onClick={() => setEditingProduct(null)}
+        >
+          <form className="listing-modal" onSubmit={handleUpdateListing} onClick={(event) => event.stopPropagation()}>
+            <h2 className="form-title">Edit Listing</h2>
+            <div className="form-group">
+              <label>Title</label>
+              <input type="text" name="title" value={editingProduct.title} onChange={handleListingInputChange} />
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Price</label>
+                <input type="number" min="1" name="price" value={editingProduct.price} onChange={handleListingInputChange} />
+              </div>
+              <div className="form-group">
+                <label>Pickup Location</label>
+                <input type="text" name="location" value={editingProduct.location} onChange={handleListingInputChange} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Description</label>
+              <textarea name="description" rows="3" value={editingProduct.description} onChange={handleListingInputChange} />
+            </div>
+            <div className="form-actions modal-actions">
+              <button type="button" className="btn-secondary-local" onClick={() => setEditingProduct(null)}>
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary" disabled={listingSaving}>
+                {listingSaving ? 'Saving...' : 'Save Listing'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Localized CSS */}
       <style dangerouslySetInnerHTML={{ __html: `
@@ -408,6 +574,39 @@ export default function ProfileScreen() {
           font-size: 2rem;
           font-weight: 600;
           margin: 0 auto;
+          overflow: hidden;
+        }
+
+        .avatar img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .avatar-input {
+          display: none;
+        }
+
+        .avatar-upload-btn {
+          position: absolute;
+          right: 2px;
+          bottom: 8px;
+          width: 32px;
+          height: 32px;
+          border-radius: 999px;
+          border: 2px solid #FFFFFF;
+          background: #0F172A;
+          color: #FFFFFF;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.24);
+        }
+
+        .avatar-upload-btn:disabled {
+          cursor: not-allowed;
+          opacity: 0.7;
         }
 
         .verified-badge {
@@ -462,7 +661,7 @@ export default function ProfileScreen() {
         /* Stats Grid */
         .stats-grid {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(2, 1fr);
           gap: 0.5rem;
           padding-top: 1.5rem;
           border-top: 1px solid #E5E7EB;
@@ -647,7 +846,6 @@ export default function ProfileScreen() {
         }
 
         .mark-sold-btn {
-          margin-left: auto;
           font-size: 0.75rem;
           font-weight: 600;
           color: #0F172A;
@@ -663,6 +861,68 @@ export default function ProfileScreen() {
 
         .mark-sold-btn:hover {
           background: #E2E8F0;
+        }
+
+        .listing-actions {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+
+        .delete-listing-btn {
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: #B91C1C;
+          background: #FEF2F2;
+          border: 1px solid #FECACA;
+          padding: 6px 12px;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s;
+          white-space: nowrap;
+        }
+
+        .delete-listing-btn:hover {
+          background: #FEE2E2;
+        }
+
+        .listing-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(6px);
+          padding: 18px;
+        }
+
+        .listing-modal {
+          width: min(560px, 100%);
+          background: #FFFFFF;
+          border-radius: 16px;
+          padding: 24px;
+          box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.25);
+        }
+
+        .modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+        }
+
+        .btn-secondary-local {
+          background: #FFFFFF;
+          color: #475569;
+          border: 1px solid #CBD5E1;
+          padding: 0.75rem 1.5rem;
+          border-radius: 8px;
+          font-weight: 500;
+          font-size: 0.875rem;
+          cursor: pointer;
         }
 
         /* Spin animation */
@@ -807,6 +1067,20 @@ export default function ProfileScreen() {
           }
           .mark-sold-btn {
             padding: 6px 8px;
+          }
+          .listing-actions {
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 6px;
+          }
+          .delete-listing-btn {
+            padding: 6px 8px;
+          }
+          .modal-actions {
+            flex-direction: column-reverse;
+          }
+          .modal-actions button {
+            width: 100%;
           }
           .sold-badge-tag {
             align-self: center;

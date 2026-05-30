@@ -83,11 +83,32 @@ function isFirestoreInternalError(error) {
   return msg.includes('internal assertion failed') || msg.includes('unexpected state');
 }
 
-const missingIndexQueryKeys = new Set();
+// ────────────────────────────────────────────
+// Missing-index cache — persisted to sessionStorage so that the probe
+// only runs ONCE per browser session. After the first page load the
+// cache is populated and subsequent loads go straight to the fallback
+// listener, completely avoiding the ca9 race-condition crash.
+// ────────────────────────────────────────────
+const STORAGE_KEY = 'ck_missing_indexes';
+function loadMissingKeys() {
+  try {
+    const raw = sessionStorage?.getItem(STORAGE_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+function saveMissingKey(key) {
+  missingIndexQueryKeys.add(key);
+  try {
+    sessionStorage?.setItem(STORAGE_KEY, JSON.stringify([...missingIndexQueryKeys]));
+  } catch (_) {}
+}
+const missingIndexQueryKeys = loadMissingKeys();
 
 function warnMissingIndexOnce(key, label) {
   if (missingIndexQueryKeys.has(key)) return;
-  missingIndexQueryKeys.add(key);
+  saveMissingKey(key);
   console.warn(`[RT] ${label} is missing a Firestore index. Using client-side sorted fallback for this session.`);
 }
 
@@ -120,27 +141,26 @@ function safeUnsubscribe(unsub) {
 /**
  * Subscribe to recently added active products.
  *
+ * Uses a probe-first pattern: a one-shot getDocs() tests whether the
+ * composite index exists BEFORE creating any watch-stream listener.
+ * This prevents the Firestore SDK ca9 crash that occurs when we tear
+ * down an onSnapshot listener from inside its own error callback.
+ *
  * @param {number}   limitCount – Max items to stream
  * @param {function} callback   – Receives `(products[], error?)`
  * @returns {function} unsubscribe
  */
 export function subscribeToRecentlyAdded(limitCount, callback) {
-  try {
-    const queryKey = 'products:active:createdAtDesc';
-    const primaryQ = query(
-      collection(db, 'products'),
-      where('status', '==', 'active'),
-      orderBy('createdAt', 'asc'),
-      limit(limitCount)
-    );
+  const queryKey = 'products:active:createdAtDesc';
 
-    const fallbackQ = query(
-      collection(db, 'products'),
-      where('status', '==', 'active'),
-      limit(limitCount * 3)
-    );
+  const fallbackQ = query(
+    collection(db, 'products'),
+    where('status', '==', 'active'),
+    limit(limitCount * 3)
+  );
 
-    const subscribeToFallback = () => onSnapshot(
+  const subscribeToFallback = () =>
+    onSnapshot(
       fallbackQ,
       (snapshot) => {
         const products = sortByCreatedAtDesc(
@@ -148,18 +168,32 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
         ).slice(0, limitCount);
         callback(products, null);
       },
-      (fallbackError) => callback([], fallbackError)
+      (err) => callback([], err)
     );
 
-    if (missingIndexQueryKeys.has(queryKey)) {
-      return subscribeToFallback();
-    }
+  // Already know the index is missing — go straight to fallback, no probe needed.
+  if (missingIndexQueryKeys.has(queryKey)) {
+    return subscribeToFallback();
+  }
 
-    let fallbackUnsubscribe = null;
-    let primaryFailedWithMissingIndex = false;
-    let unsubscribe = null;
-    try {
-      unsubscribe = onSnapshot(
+  // Probe: one-shot getDocs on the ordered query.
+  // If it fails with a missing index we mark it and use the fallback onSnapshot.
+  // We NEVER call onSnapshot on the primary — this is the key to avoiding ca9.
+  let fallbackUnsub = null;
+  let cancelled = false;
+
+  const primaryQ = query(
+    collection(db, 'products'),
+    where('status', '==', 'active'),
+    orderBy('createdAt', 'asc'),
+    limit(limitCount)
+  );
+
+  getDocs(primaryQ)
+    .then(() => {
+      // Index exists — subscribe using the ordered primary query.
+      if (cancelled) return;
+      fallbackUnsub = onSnapshot(
         primaryQ,
         (snapshot) => {
           const products = sortByCreatedAtDesc(
@@ -167,63 +201,50 @@ export function subscribeToRecentlyAdded(limitCount, callback) {
           ).slice(0, limitCount);
           callback(products, null);
         },
-        async (error) => {
-          if (!needsIndex(error) && !isFirestoreInternalError(error)) {
-            console.error('[RT] subscribeToRecentlyAdded error:', error.message);
-            callback([], error);
-            return;
-          }
-          primaryFailedWithMissingIndex = true;
-          warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
-          if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
+        (err) => {
+          console.error('[RT] subscribeToRecentlyAdded primary error:', err.message);
+          callback([], err);
         }
       );
-    } catch (error) {
-      if (!needsIndex(error) && !isFirestoreInternalError(error)) throw error;
-      primaryFailedWithMissingIndex = true;
-      warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
-      getDocs(fallbackQ)
-        .then((snapshot) => callback(sortByCreatedAtDesc(
-          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-        ).slice(0, limitCount), null))
-        .catch((fallbackError) => callback([], fallbackError));
-      unsubscribe = () => {};
-    }
-    return () => {
-      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
-      safeUnsubscribe(fallbackUnsubscribe);
-    };
-  } catch (error) {
-    console.error('[RT] subscribeToRecentlyAdded setup failed:', error.message);
-    callback([], error);
-    return () => {}; // no-op unsubscribe
-  }
+    })
+    .catch((err) => {
+      if (cancelled) return;
+      if (needsIndex(err)) {
+        warnMissingIndexOnce(queryKey, 'subscribeToRecentlyAdded');
+      } else {
+        console.error('[RT] subscribeToRecentlyAdded probe error:', err.message);
+      }
+      // Use fallback regardless of error type.
+      fallbackUnsub = subscribeToFallback();
+    });
+
+  return () => {
+    cancelled = true;
+    safeUnsubscribe(fallbackUnsub);
+  };
 }
 
 /**
  * Subscribe to the cheapest active products (best deals).
+ *
+ * Uses a probe-first pattern to avoid the Firestore ca9 crash.
+ * See subscribeToRecentlyAdded for a full explanation.
  *
  * @param {number}   limitCount - Max items to stream
  * @param {function} callback   - Receives `(products[], error?)`
  * @returns {function} unsubscribe
  */
 export function subscribeToBestDeals(limitCount, callback) {
-  try {
-    const queryKey = 'products:active:priceAsc';
-    const primaryQ = query(
-      collection(db, 'products'),
-      where('status', '==', 'active'),
-      orderBy('price', 'asc'),
-      limit(limitCount)
-    );
+  const queryKey = 'products:active:priceAsc';
 
-    const fallbackQ = query(
-      collection(db, 'products'),
-      where('status', '==', 'active'),
-      limit(limitCount * 3)
-    );
+  const fallbackQ = query(
+    collection(db, 'products'),
+    where('status', '==', 'active'),
+    limit(limitCount * 3)
+  );
 
-    const subscribeToFallback = () => onSnapshot(
+  const subscribeToFallback = () =>
+    onSnapshot(
       fallbackQ,
       (snapshot) => {
         const products = sortByPriceAsc(
@@ -231,54 +252,52 @@ export function subscribeToBestDeals(limitCount, callback) {
         ).slice(0, limitCount);
         callback(products, null);
       },
-      (fallbackError) => callback([], fallbackError)
+      (err) => callback([], err)
     );
 
-    if (missingIndexQueryKeys.has(queryKey)) {
-      return subscribeToFallback();
-    }
+  if (missingIndexQueryKeys.has(queryKey)) {
+    return subscribeToFallback();
+  }
 
-    let fallbackUnsubscribe = null;
-    let primaryFailedWithMissingIndex = false;
-    let unsubscribe = null;
-    try {
-      unsubscribe = onSnapshot(
+  let fallbackUnsub = null;
+  let cancelled = false;
+
+  const primaryQ = query(
+    collection(db, 'products'),
+    where('status', '==', 'active'),
+    orderBy('price', 'asc'),
+    limit(limitCount)
+  );
+
+  getDocs(primaryQ)
+    .then(() => {
+      if (cancelled) return;
+      fallbackUnsub = onSnapshot(
         primaryQ,
         (snapshot) => {
           const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
           callback(products, null);
         },
-        (error) => {
-          if (!needsIndex(error) && !isFirestoreInternalError(error)) {
-            console.error('[RT] subscribeToBestDeals error:', error.message);
-            callback([], error);
-            return;
-          }
-          primaryFailedWithMissingIndex = true;
-          warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
-          if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
+        (err) => {
+          console.error('[RT] subscribeToBestDeals primary error:', err.message);
+          callback([], err);
         }
       );
-    } catch (error) {
-      if (!needsIndex(error) && !isFirestoreInternalError(error)) throw error;
-      primaryFailedWithMissingIndex = true;
-      warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
-      getDocs(fallbackQ)
-        .then((snapshot) => callback(sortByPriceAsc(
-          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))
-        ).slice(0, limitCount), null))
-        .catch((fallbackError) => callback([], fallbackError));
-      unsubscribe = () => {};
-    }
-    return () => {
-      if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
-      safeUnsubscribe(fallbackUnsubscribe);
-    };
-  } catch (error) {
-    console.error('[RT] subscribeToBestDeals setup failed:', error.message);
-    callback([], error);
-    return () => {};
-  }
+    })
+    .catch((err) => {
+      if (cancelled) return;
+      if (needsIndex(err)) {
+        warnMissingIndexOnce(queryKey, 'subscribeToBestDeals');
+      } else {
+        console.error('[RT] subscribeToBestDeals probe error:', err.message);
+      }
+      fallbackUnsub = subscribeToFallback();
+    });
+
+  return () => {
+    cancelled = true;
+    safeUnsubscribe(fallbackUnsub);
+  };
 }
 
 /**

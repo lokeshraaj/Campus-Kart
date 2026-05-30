@@ -188,9 +188,8 @@ export async function deleteProduct(productId) {
 }
 
 /**
- * Mark a product as sold by removing its listing document.
- * Chat documents already keep product title/price context, so the
- * marketplace does not need to retain sold listings in `products`.
+ * Mark a product as sold while retaining the listing document for
+ * transaction history, seller ratings, and shared detail views.
  *
  * @param {string} productId – Firestore document ID
  * @returns {Promise<void>}
@@ -220,8 +219,12 @@ export async function markAsSold(productId) {
     }
 
     const docRef = doc(db, 'products', productId);
-    await deleteDoc(docRef);
-    console.log('[DB] Sold product deleted:', productId);
+    await updateDoc(docRef, {
+      status: 'sold',
+      soldAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    console.log('[DB] Product marked sold:', productId);
   } catch (error) {
     console.error('[DB] markAsSold failed:', error.message);
     throw error;
@@ -229,8 +232,8 @@ export async function markAsSold(productId) {
 }
 
 /**
- * Delete old sold product documents for a seller.
- * This cleans up listings created before sold items were hard-deleted.
+ * Legacy no-op kept for older callers.
+ * Sold products are retained as transaction history.
  *
  * @param {string} userId - Firebase Auth UID of the seller
  * @returns {Promise<number>} Number of deleted product documents
@@ -238,24 +241,7 @@ export async function markAsSold(productId) {
 export async function cleanupSoldProductsByUser(userId) {
   try {
     if (!userId) return 0;
-
-    const q = query(
-      productsRef,
-      where('userId', '==', userId),
-      where('status', '==', 'sold')
-    );
-    const snapshot = await getDocs(q);
-
-    if (snapshot.empty) return 0;
-
-    const batch = writeBatch(db);
-    snapshot.docs.forEach((productDoc) => {
-      batch.delete(productDoc.ref);
-    });
-    await batch.commit();
-
-    console.log('[DB] Cleaned up sold products:', snapshot.size);
-    return snapshot.size;
+    return 0;
   } catch (error) {
     console.error('[DB] cleanupSoldProductsByUser failed:', error.message);
     throw error;
@@ -303,6 +289,40 @@ export async function rateSeller({ productId, sellerId, rating }) {
     }, { merge: true });
   } catch (error) {
     console.error('[DB] rateSeller failed:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Report a listing for moderation review.
+ *
+ * @param {Object} payload
+ * @param {string} payload.productId
+ * @param {string} payload.reason
+ * @param {string} [payload.details]
+ * @returns {Promise<string>} report document ID
+ */
+export async function reportListing({ productId, reason, details = '' }) {
+  try {
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error('You must be logged in to report a listing.');
+    }
+    if (!productId || !reason) {
+      throw new Error('Please choose a reason for the report.');
+    }
+
+    const reportRef = await addDoc(collection(db, 'listingReports'), {
+      productId,
+      reporterId: user.uid,
+      reason,
+      details: details.trim(),
+      status: 'open',
+      createdAt: serverTimestamp(),
+    });
+    return reportRef.id;
+  } catch (error) {
+    console.error('[DB] reportListing failed:', error.message);
     throw error;
   }
 }

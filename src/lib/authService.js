@@ -11,6 +11,7 @@ import {
   signOut,
   GoogleAuthProvider,
   signInWithPopup,
+  updateProfile,
 } from 'firebase/auth';
 import { auth } from './firebase';
 
@@ -89,4 +90,19 @@ export async function logout() {
  */
 export function getCurrentUser() {
   return auth.currentUser;
+}
+
+/**
+ * Update the signed-in user's Firebase Auth profile.
+ *
+ * @param {{ displayName?: string, photoURL?: string }} profile
+ * @returns {Promise<void>}
+ */
+export async function updateCurrentUserProfile(profile) {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('User must be authenticated to update profile.');
+  }
+
+  await updateProfile(user, profile);
 }

@@ -40,7 +40,11 @@ service cloud.firestore {
                     && request.resource.data.participants.size() == 2;
 
       allow update: if request.auth != null
-                    && request.auth.uid in resource.data.participants;
+                    && request.auth.uid in resource.data.participants
+                    && (
+                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['productStatus', 'soldAt'])
+                      || request.auth.uid == resource.data.sellerId
+                    );
 
       allow delete: if request.auth != null
                     && request.auth.uid in resource.data.participants;
@@ -77,6 +81,18 @@ service cloud.firestore {
                     && request.resource.data.rating <= 5;
 
       allow delete: if false;
+    }
+
+    match /listingReports/{reportId} {
+      allow read: if false;
+
+      allow create: if request.auth != null
+                    && request.resource.data.reporterId == request.auth.uid
+                    && request.resource.data.productId is string
+                    && request.resource.data.reason is string
+                    && request.resource.data.status == 'open';
+
+      allow update, delete: if false;
     }
 
     match /{document=**} {

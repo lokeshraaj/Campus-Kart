@@ -37,7 +37,45 @@ function isFirestoreInternalError(error) {
   return msg.includes('internal assertion failed') || msg.includes('unexpected state');
 }
 
-const missingIndexQueryKeys = new Set();
+// Persist missing-index keys to sessionStorage so after the first
+// probe failure the fallback is used immediately on next page load.
+const STORAGE_KEY = 'ck_missing_indexes';
+function loadMissingKeys() {
+  try {
+    const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY) : null;
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch (_) { return new Set(); }
+}
+function saveMissingKey(key) {
+  missingIndexQueryKeys.add(key);
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...missingIndexQueryKeys]));
+    }
+  } catch (_) {}
+}
+const missingIndexQueryKeys = loadMissingKeys();
+
+// ─────────────────────────────────────────────
+// Shared-listener registry for subscribeToUserChats
+// ─────────────────────────────────────────────
+// Multiple components (HomeContext for badge, ChatsScreen for the list)
+// may call subscribeToUserChats for the same userId simultaneously.
+// Registering two separate onSnapshot calls on the same Firestore query
+// corrupts the SDK's internal watch-stream state (assertion ca9/b815).
+//
+// Solution: reference-counted shared listeners.
+//   • First caller  → creates the real Firestore listener.
+//   • Nth caller    → joins the existing listener's callback set.
+//   • Nth unsub     → removes that callback only.
+//   • Last unsub    → tears down the real Firestore listener.
+// ─────────────────────────────────────────────
+const activeChatsSubscriptions = new Map();
+// activeChatsSubscriptions[userId] = {
+//   unsub: function,       ← real Firestore unsubscribe
+//   callbacks: Set,        ← all active consumer callbacks
+//   latestData: Array,     ← last emitted data (for new subscribers)
+// }
 
 function safeUnsubscribe(unsub) {
   if (typeof unsub !== 'function') return;
@@ -215,11 +253,40 @@ export function subscribeToMessages(chatId, callback) {
 /**
  * Subscribe to all chat threads for a user (real-time).
  *
+ * IMPORTANT: This function is reference-counted. No matter how many
+ * components call it for the same userId, only ONE Firestore listener
+ * is ever created. Each caller receives its own unsubscribe function
+ * that removes it from the shared callback set; the real listener is
+ * torn down only when the last caller unsubscribes.
+ *
  * @param {string}   userId   – Firebase UID
- * @param {function} callback – Receives chats[]
+ * @param {function} callback – Receives (chats[], error|null)
  * @returns {function} unsubscribe
  */
 export function subscribeToUserChats(userId, callback) {
+  // ── If a listener for this userId already exists, join it ──────────
+  if (activeChatsSubscriptions.has(userId)) {
+    const existing = activeChatsSubscriptions.get(userId);
+    existing.callbacks.add(callback);
+
+    // Immediately deliver the latest data so the new subscriber
+    // doesn't have to wait for the next Firestore event.
+    if (existing.latestData !== undefined) {
+      try { callback(existing.latestData, null); } catch (_) {}
+    }
+
+    return () => {
+      const sub = activeChatsSubscriptions.get(userId);
+      if (!sub) return;
+      sub.callbacks.delete(callback);
+      if (sub.callbacks.size === 0) {
+        safeUnsubscribe(sub.unsub);
+        activeChatsSubscriptions.delete(userId);
+      }
+    };
+  }
+
+  // ── First subscriber: create the real Firestore listener ───────────
   const chatsRef = collection(db, 'chats');
   const queryKey = `chats:user:${userId}:lastMessageAtDesc`;
   const primaryQ = query(
@@ -227,73 +294,104 @@ export function subscribeToUserChats(userId, callback) {
     where('participants', 'array-contains', userId),
     orderBy('lastMessageAt', 'desc')
   );
-
   const fallbackQ = query(
     chatsRef,
     where('participants', 'array-contains', userId)
   );
 
-  const sortChats = (docs) => docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => {
-      const aMs = a?.lastMessageAt?.toMillis?.() ?? 0;
-      const bMs = b?.lastMessageAt?.toMillis?.() ?? 0;
-      return bMs - aMs;
-    });
+  const sortChats = (docs) =>
+    docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => {
+        const aMs = a?.lastMessageAt?.toMillis?.() ?? 0;
+        const bMs = b?.lastMessageAt?.toMillis?.() ?? 0;
+        return bMs - aMs;
+      });
 
-  const subscribeToFallback = () => onSnapshot(fallbackQ, (snapshot) => {
-    callback(sortChats(snapshot.docs), null);
-  }, (error) => {
-    callback([], error);
-  });
+  // Dispatch data to every registered callback.
+  const dispatch = (data, err) => {
+    const sub = activeChatsSubscriptions.get(userId);
+    if (!sub) return;
+    sub.latestData = data;
+    sub.callbacks.forEach((cb) => {
+      try { cb(data, err); } catch (_) {}
+    });
+  };
+
+  const callbacks = new Set([callback]);
+  // Placeholder so callers that join before the listener resolves get data.
+  const entry = { unsub: () => {}, callbacks, latestData: undefined };
+  activeChatsSubscriptions.set(userId, entry);
+
+  const subscribeToFallback = () =>
+    onSnapshot(
+      fallbackQ,
+      (snapshot) => dispatch(sortChats(snapshot.docs), null),
+      (error) => dispatch([], error)
+    );
+
+  let firestoreUnsub;
 
   if (missingIndexQueryKeys.has(queryKey)) {
-    return subscribeToFallback();
-  }
+    firestoreUnsub = subscribeToFallback();
+  } else {
+    let primaryFailedWithMissingIndex = false;
+    let primaryUnsub = null;
 
-  let fallbackUnsubscribe = null;
-  let primaryFailedWithMissingIndex = false;
-  let unsubscribe = null;
-  try {
-    unsubscribe = onSnapshot(primaryQ, (snapshot) => {
-      const chats = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-      }));
-      callback(chats);
-    }, (error) => {
-      if (!needsIndex(error) && !isFirestoreInternalError(error)) {
-        console.error('[Chat] subscribeToUserChats error:', error.message);
-        callback([], error);
-        return;
+    try {
+      primaryUnsub = onSnapshot(
+        primaryQ,
+        (snapshot) => {
+          dispatch(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })), null);
+        },
+        (error) => {
+          if (!needsIndex(error) && !isFirestoreInternalError(error)) {
+            console.error('[Chat] subscribeToUserChats error:', error.message);
+            dispatch([], error);
+            return;
+          }
+          if (!primaryFailedWithMissingIndex) {
+            primaryFailedWithMissingIndex = true;
+            saveMissingKey(queryKey);
+            console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
+            // Tear down primary BEFORE starting fallback.
+            safeUnsubscribe(primaryUnsub);
+          }
+          const sub = activeChatsSubscriptions.get(userId);
+          if (sub && sub.unsub === primaryUnsub) {
+            sub.unsub = subscribeToFallback();
+          }
+        }
+      );
+      firestoreUnsub = primaryUnsub;
+    } catch (setupError) {
+      if (!needsIndex(setupError) && !isFirestoreInternalError(setupError)) {
+        console.error('[Chat] subscribeToUserChats setup error:', setupError.message);
+        activeChatsSubscriptions.delete(userId);
+        dispatch([], setupError);
+        return () => {};
       }
-      primaryFailedWithMissingIndex = true;
-      if (!missingIndexQueryKeys.has(queryKey)) {
-        missingIndexQueryKeys.add(queryKey);
-        console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
-      }
-      if (!fallbackUnsubscribe) fallbackUnsubscribe = subscribeToFallback();
-    });
-  } catch (error) {
-    if (!needsIndex(error) && !isFirestoreInternalError(error)) {
-      console.error('[Chat] subscribeToUserChats setup error:', error.message);
-      callback([], error);
-      return () => {};
-    }
-    primaryFailedWithMissingIndex = true;
-    if (!missingIndexQueryKeys.has(queryKey)) {
-      missingIndexQueryKeys.add(queryKey);
+      saveMissingKey(queryKey);
       console.warn('[Chat] subscribeToUserChats is missing a Firestore index. Using client-side sorted fallback for this session.');
+      getDocs(fallbackQ)
+        .then((snapshot) => dispatch(sortChats(snapshot.docs), null))
+        .catch((err) => dispatch([], err));
+      firestoreUnsub = subscribeToFallback();
     }
-    getDocs(fallbackQ)
-      .then((snapshot) => callback(sortChats(snapshot.docs), null))
-      .catch((fallbackError) => callback([], fallbackError));
-    unsubscribe = () => {};
   }
 
+  // Store the real unsubscribe in the registry.
+  entry.unsub = firestoreUnsub;
+
+  // Return this caller's personal unsubscribe.
   return () => {
-    if (!primaryFailedWithMissingIndex) safeUnsubscribe(unsubscribe);
-    safeUnsubscribe(fallbackUnsubscribe);
+    const sub = activeChatsSubscriptions.get(userId);
+    if (!sub) return;
+    sub.callbacks.delete(callback);
+    if (sub.callbacks.size === 0) {
+      safeUnsubscribe(sub.unsub);
+      activeChatsSubscriptions.delete(userId);
+    }
   };
 }
 

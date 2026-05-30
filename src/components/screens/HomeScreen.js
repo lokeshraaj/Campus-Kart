@@ -104,11 +104,14 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
   const {
     products,
     deals,
+    productsLimit,
     productsLoading,
     dealsLoading,
+    loadMoreProducts,
     activeCategory,
     setActiveCategory,
     sortOrder,
+    setSortOrder,
     cycleSortOrder,
     scrollY,
     setScrollY,
@@ -149,6 +152,18 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
     showToast(message, 'info', 3000);
   };
 
+  const showAllRecent = () => {
+    setActiveCategory('all');
+    setSortOrder(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const showAllDeals = () => {
+    setActiveCategory('all');
+    setSortOrder('low-high');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // ── Filtering & sorting (client-side on the streamed data) ─
   const filteredProducts = useMemo(() => {
     let filtered = activeCategory === 'all'
@@ -163,6 +178,8 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
 
     return filtered;
   }, [products, activeCategory, sortOrder]);
+
+  const canLoadMore = activeCategory === 'all' && products.length >= productsLimit;
 
   /** Polished skeleton card for product grid */
   const SkeletonProductCard = () => (
@@ -289,7 +306,7 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
             <h2 className="section-title">
               Best Deals <Flame size={18} strokeWidth={2} color="#ea580c" style={{ marginLeft: 4 }} />
             </h2>
-            <button className="section-link" id="view-all-deals">
+            <button className="section-link" id="view-all-deals" onClick={showAllDeals}>
               View All
               <span>→</span>
             </button>
@@ -354,7 +371,7 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
             <h2 className="section-title">
               Recently Added <Sparkles size={18} strokeWidth={2} color="#0284c7" style={{ marginLeft: 4 }} />
             </h2>
-            <button className="section-link" id="view-all-recent">
+            <button className="section-link" id="view-all-recent" onClick={showAllRecent}>
               View All
               <span>→</span>
             </button>
@@ -421,13 +438,20 @@ export default function HomeScreen({ onProductClick, onSearchClick }) {
                     <h3 className="product-card-title">{product.title}</h3>
                     <div className="product-card-price">₹{product.price?.toLocaleString()}</div>
                     <div className="product-card-meta">
-                      <span>{product.college || product.sellerName || 'Campus'}</span>
+                      <span>{product.sellerName ? `Posted by ${product.sellerName}` : 'Posted on CampusKart'}</span>
                       <span className="product-card-meta-dot"></span>
                       <span>{product.distance || product.condition || ''}</span>
                     </div>
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {!productsLoading && canLoadMore && (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '1.5rem 0 0' }}>
+              <button className="sort-btn" type="button" onClick={loadMoreProducts}>
+                Load more listings
+              </button>
             </div>
           )}
         </div>

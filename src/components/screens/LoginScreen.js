@@ -72,10 +72,31 @@ export default function LoginScreen() {
 
         {/* Illustration */}
         <div className="login-illustration">
-          <img
-            src="/students-exchange.png"
-            alt="Students exchanging books and gadgets"
-          />
+          <svg
+            viewBox="0 0 420 260"
+            role="img"
+            aria-label="Students exchanging books and gadgets"
+            style={{ width: '100%', height: '100%', display: 'block' }}
+          >
+            <rect width="420" height="260" rx="28" fill="#EFF6FF" />
+            <circle cx="340" cy="54" r="34" fill="#DBEAFE" />
+            <circle cx="76" cy="204" r="42" fill="#DCFCE7" />
+            <path d="M92 176h236c16 0 30 14 30 30v10H62v-10c0-16 14-30 30-30Z" fill="#CBD5E1" />
+            <rect x="134" y="77" width="58" height="78" rx="16" fill="#2563EB" />
+            <circle cx="163" cy="54" r="22" fill="#FBBF24" />
+            <path d="M126 121c-30 6-45 23-48 51" stroke="#2563EB" strokeWidth="12" strokeLinecap="round" />
+            <path d="M194 120c31 9 51 22 70 44" stroke="#2563EB" strokeWidth="12" strokeLinecap="round" />
+            <rect x="246" y="76" width="58" height="79" rx="16" fill="#0F172A" />
+            <circle cx="275" cy="53" r="22" fill="#F59E0B" />
+            <path d="M238 121c-26 8-46 23-66 43" stroke="#0F172A" strokeWidth="12" strokeLinecap="round" />
+            <path d="M306 120c28 8 46 25 53 52" stroke="#0F172A" strokeWidth="12" strokeLinecap="round" />
+            <rect x="187" y="114" width="48" height="34" rx="6" fill="#FFFFFF" stroke="#94A3B8" strokeWidth="3" />
+            <path d="M197 125h28M197 136h20" stroke="#2563EB" strokeWidth="4" strokeLinecap="round" />
+            <rect x="218" y="140" width="44" height="32" rx="7" fill="#22C55E" />
+            <path d="M230 152h20M230 161h14" stroke="#FFFFFF" strokeWidth="4" strokeLinecap="round" />
+            <path d="M122 192h48M250 192h48" stroke="#64748B" strokeWidth="12" strokeLinecap="round" />
+            <path d="M158 196l-16 32M270 196l16 32" stroke="#334155" strokeWidth="12" strokeLinecap="round" />
+          </svg>
         </div>
 
         {/* Error Banner */}

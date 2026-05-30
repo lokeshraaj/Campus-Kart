@@ -53,6 +53,7 @@ export function HomeProvider({ userId, children }) {
   // ── Feed data ────────────────────────────────────────────
   const [products, setProducts] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [productsLimit, setProductsLimit] = useState(20);
   // true only before the very first snapshot arrives
   const [productsLoading, setProductsLoading] = useState(true);
   const [dealsLoading, setDealsLoading] = useState(true);
@@ -83,7 +84,7 @@ export function HomeProvider({ userId, children }) {
     productsSeenRef.current = false;
     setProductsLoading(true);
 
-    const unsub = subscribeToRecentlyAdded(20, (data) => {
+    const unsub = subscribeToRecentlyAdded(productsLimit, (data) => {
       setProducts(data);
       if (!productsSeenRef.current) {
         productsSeenRef.current = true;
@@ -92,7 +93,7 @@ export function HomeProvider({ userId, children }) {
     });
 
     return () => unsub();
-  }, [userId]);
+  }, [userId, productsLimit]);
 
   // ── Deals listener (mounted once per user session) ───────
   useEffect(() => {
@@ -146,17 +147,24 @@ export function HomeProvider({ userId, children }) {
     });
   }, []);
 
+  const loadMoreProducts = useCallback(() => {
+    setProductsLimit((current) => current + 20);
+  }, []);
+
   // ── Context value ────────────────────────────────────────
   const value = {
     // data
     products,
     deals,
+    productsLimit,
     productsLoading,
     dealsLoading,
+    loadMoreProducts,
     // filters
     activeCategory,
     setActiveCategory,
     sortOrder,
+    setSortOrder,
     cycleSortOrder,
     // scroll
     scrollY,
